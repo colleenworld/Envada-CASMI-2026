@@ -36,6 +36,7 @@ from casmi26.chemistry.adducts import (
         ),
     ],
 )
+
 def test_precursor_conversion(
     adduct,
     neutral,
@@ -79,3 +80,9 @@ def test_unknown_adduct_returns_none():
         300.0,
         "[something-we-dont-support]",
     ) is None
+
+def test_neutral_mass_for_molecular_ion():
+    assert neutral_mass(
+        462.285,
+        "[M]+",
+    ) == 462.285

@@ -35,8 +35,15 @@ class Adduct:
     def precursor_mz(self, neutral_mass: float) -> float:
         return neutral_mass + self.mass_shift
 
-
 ADDUCTS: dict[str, Adduct] = {
+    "[M]-": Adduct(
+        name="[M]-",
+        mass_shift=0.0,
+    ),
+    "[M]+": Adduct(
+        name="[M]+",
+        mass_shift=0.0,
+    ),
     "[M+H]+": Adduct(
         name="[M+H]+",
         mass_shift=PROTON,
@@ -92,3 +99,9 @@ def neutral_mass(
     return definition.neutral_mass(
         precursor_mz
     )
+
+def test_neutral_mass_for_negative_molecular_ion():
+    assert neutral_mass(
+        462.285,
+        "[M]-",
+    ) == 462.285
