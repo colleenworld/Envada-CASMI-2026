@@ -3,6 +3,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from casmi26.retrieval.aggregation import (
+    aggregate_max_by_candidate,
+    merge_candidate_scores,
+)
 from casmi26.spectra.binning import bin_spectrum
 
 
@@ -42,158 +46,127 @@ def evaluate_mode(
     candidates: pd.DataFrame,
     queries: pd.DataFrame,
     mode: str,
-) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-    candidates = (
-        candidates[candidates["ionization_mode"] == mode]
+) -> dict[str, dict[str, float]]:
+    # Ionization mode is a search constraint, not an evaluation unit.
+    mode_candidates = (
+        candidates.loc[
+            candidates["ionization_mode"] == mode
+        ]
         .reset_index(drop=True)
     )
 
-    queries = (
-        queries[queries["ionization_mode"] == mode]
+    mode_queries = (
+        queries.loc[
+            queries["ionization_mode"] == mode
+        ]
         .reset_index(drop=True)
     )
 
     print(f"\n{mode}")
     print("-" * len(mode))
-    print(f"candidate spectra: {len(candidates):,}")
-    print(f"query spectra:     {len(queries):,}")
-
-    if candidates.empty or queries.empty:
-        return []
-
-    print("Binning candidate spectra...")
-    candidate_vectors = bin_spectra(candidates)
-
-    print("Binning query spectra...")
-    query_vectors = bin_spectra(queries)
-
-    candidate_keys = candidates["inchikey14"].to_numpy()
-
-    # Build an integer molecule index so we can efficiently aggregate
-    # spectrum similarities into candidate-molecule similarities.
-    unique_candidate_keys, candidate_group = np.unique(
-        candidate_keys,
-        return_inverse=True,
+    print(
+        f"candidate spectra: "
+        f"{len(mode_candidates):,}"
+    )
+    print(
+        f"query spectra:     "
+        f"{len(mode_queries):,}"
     )
 
-    molecule_scores: dict[str, np.ndarray] = {}
+    if mode_candidates.empty or mode_queries.empty:
+        return {}
+
+    print("Binning candidate spectra...")
+    candidate_vectors = bin_spectra(mode_candidates)
+
+    print("Binning query spectra...")
+    query_vectors = bin_spectra(mode_queries)
+
+    candidate_keys = (
+        mode_candidates["inchikey14"]
+        .astype(str)
+        .to_numpy()
+    )
+
+    molecule_scores: dict[str, dict[str, float]] = {}
 
     print("Searching...")
 
-    # Work in batches to avoid constructing the complete
-    # query × candidate similarity matrix.
     batch_size = 32
 
-    for start in range(0, len(queries), batch_size):
-        end = min(start + batch_size, len(queries))
+    for start in range(0, len(mode_queries), batch_size):
+        end = min(
+            start + batch_size,
+            len(mode_queries),
+        )
 
         similarities = (
-            query_vectors[start:end] @ candidate_vectors.T
+            query_vectors[start:end]
+            @ candidate_vectors.T
         )
 
-        for row_offset, spectrum_scores in enumerate(similarities):
+        for row_offset, spectrum_scores in enumerate(
+            similarities
+        ):
             query_index = start + row_offset
-            query_key = queries.iloc[query_index]["inchikey14"]
 
-            # Maximum spectrum similarity for each candidate molecule.
-            scores = np.full(
-                len(unique_candidate_keys),
-                -np.inf,
-                dtype=np.float32,
+            query_key = str(
+                mode_queries.iloc[
+                    query_index
+                ]["inchikey14"]
             )
 
-            np.maximum.at(
+            (
+                candidate_molecule_keys,
                 scores,
-                candidate_group,
+            ) = aggregate_max_by_candidate(
                 spectrum_scores,
+                candidate_keys,
             )
 
-            if query_key not in molecule_scores:
-                molecule_scores[query_key] = scores
-            else:
-                # Maximum across all query spectra for this molecule.
-                molecule_scores[query_key] = np.maximum(
-                    molecule_scores[query_key],
-                    scores,
-                )
-
-    reciprocal_ranks = []
-
-    return unique_candidate_keys, molecule_scores
-
-
-def main() -> None:
-    print("Loading relevant columns...")
-
-    df = pd.read_parquet(
-        TRAIN_PATH,
-        columns=[
-            "inchikey14",
-            "ingest_lib",
-            "ionization_mode",
-            "ms2_mzs",
-            "ms2_normalized_intensities",
-        ],
-    )
-
-    domain_keys = set(
-        df.loc[
-            df["ingest_lib"] == DOMAIN_LIBRARY,
-            "inchikey14",
-        ]
-    )
-
-    queries = df[
-        df["ingest_lib"] == DOMAIN_LIBRARY
-    ].copy()
-
-    candidates = df[
-        df["inchikey14"].isin(domain_keys)
-        & (df["ingest_lib"] != DOMAIN_LIBRARY)
-    ].copy()
-
-    print(f"Candidate spectra: {len(candidates):,}")
-    print(f"Query spectra:     {len(queries):,}")
-    print(
-        f"Query molecules:   "
-        f"{queries['inchikey14'].nunique():,}"
-    )
-
-    all_scores = []
-
-    combined_scores: dict[str, dict[str, float]] = {}
-
-    for mode in sorted(queries["ionization_mode"].unique()):
-        candidate_keys, mode_scores = evaluate_mode(
-            candidates,
-            queries,
-            mode,
-        )
-
-        for query_key, scores in mode_scores.items():
-            molecule_candidates = combined_scores.setdefault(
+            query_scores = molecule_scores.setdefault(
                 query_key,
                 {},
             )
 
-            for candidate_key, score in zip(
-                    candidate_keys,
-                    scores,
-                    strict=True,
-            ):
-                previous = molecule_candidates.get(
-                    candidate_key,
-                    -np.inf,
-                )
+            merge_candidate_scores(
+                query_scores,
+                candidate_molecule_keys,
+                scores,
+            )
 
-                molecule_candidates[candidate_key] = max(
-                    previous,
-                    float(score),
-                )
+    return molecule_scores
 
+
+def merge_mode_results(
+    combined_scores: dict[str, dict[str, float]],
+    mode_scores: dict[str, dict[str, float]],
+) -> None:
+    for query_key, candidate_scores in (
+        mode_scores.items()
+    ):
+        combined = combined_scores.setdefault(
+            query_key,
+            {},
+        )
+
+        for candidate_key, score in (
+            candidate_scores.items()
+        ):
+            combined[candidate_key] = max(
+                combined.get(candidate_key, -np.inf),
+                score,
+            )
+
+
+def calculate_metrics(
+    molecule_scores: dict[str, dict[str, float]],
+) -> np.ndarray:
     reciprocal_ranks = []
 
-    for truth_key, candidate_scores in combined_scores.items():
+    for truth_key, candidate_scores in (
+        molecule_scores.items()
+    ):
         ranked = sorted(
             candidate_scores.items(),
             key=lambda item: item[1],
@@ -217,12 +190,83 @@ def main() -> None:
 
         reciprocal_ranks.append(reciprocal_rank)
 
-    scores = np.asarray(reciprocal_ranks)
+    return np.asarray(
+        reciprocal_ranks,
+        dtype=np.float64,
+    )
+
+
+def main() -> None:
+    print("Loading relevant columns...")
+
+    df = pd.read_parquet(
+        TRAIN_PATH,
+        columns=[
+            "inchikey14",
+            "ingest_lib",
+            "ionization_mode",
+            "ms2_mzs",
+            "ms2_normalized_intensities",
+        ],
+    )
+
+    domain_keys = set(
+        df.loc[
+            df["ingest_lib"] == DOMAIN_LIBRARY,
+            "inchikey14",
+        ]
+    )
+
+    queries = df.loc[
+        df["ingest_lib"] == DOMAIN_LIBRARY
+    ].copy()
+
+    candidates = df.loc[
+        df["inchikey14"].isin(domain_keys)
+        & (df["ingest_lib"] != DOMAIN_LIBRARY)
+    ].copy()
+
+    print(
+        f"Candidate spectra: {len(candidates):,}"
+    )
+    print(
+        f"Query spectra:     {len(queries):,}"
+    )
+    print(
+        f"Query molecules:   "
+        f"{queries['inchikey14'].nunique():,}"
+    )
+
+    combined_scores: dict[
+        str,
+        dict[str, float],
+    ] = {}
+
+    for mode in sorted(
+        queries["ionization_mode"].unique()
+    ):
+        mode_scores = evaluate_mode(
+            candidates,
+            queries,
+            mode,
+        )
+
+        merge_mode_results(
+            combined_scores,
+            mode_scores,
+        )
+
+    scores = calculate_metrics(combined_scores)
 
     print("\nResults")
     print("=======")
-    print(f"Molecules evaluated: {len(scores):,}")
-    print(f"MRR@25:              {np.mean(scores):.4f}")
+    print(
+        f"Molecules evaluated: {len(scores):,}"
+    )
+    print(
+        f"MRR@25:              "
+        f"{np.mean(scores):.4f}"
+    )
     print(
         f"Top-1 accuracy:       "
         f"{np.mean(scores == 1.0):.1%}"
