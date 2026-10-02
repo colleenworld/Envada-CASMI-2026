@@ -2,7 +2,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy import sparse
 
 from casmi26.chemistry.adducts import neutral_mass
 from casmi26.retrieval.candidates import (
@@ -33,6 +32,20 @@ MANIFEST_PATH = Path(
 BASELINE2_PATH = Path(
     "data/processed/results/"
     "retrieval_dev_baseline2_frozen.parquet"
+)
+
+RESULTS_DIR = Path(
+    "data/processed/results"
+)
+
+CANDIDATE_RESULTS_PATH = (
+    RESULTS_DIR
+    / "retrieval_dev_baseline3_candidates.parquet"
+)
+
+CANDIDATE_MAP_PATH = (
+    RESULTS_DIR
+    / "retrieval_dev_baseline3_candidate_map.parquet"
 )
 
 TOLERANCE_DA = 0.01
@@ -454,7 +467,8 @@ def main() -> None:
         )
 
         # -----------------------------------------------------
-        # Source A.
+        # Source A:
+        # same-polarity neutral-mass candidates.
         # -----------------------------------------------------
 
         same_candidates = (
@@ -470,7 +484,8 @@ def main() -> None:
         )
 
         # -----------------------------------------------------
-        # Source B.
+        # Source B:
+        # opposite-polarity neutral-mass candidates.
         # -----------------------------------------------------
 
         opposite_candidates = (
@@ -546,8 +561,15 @@ def main() -> None:
                 "truth_in_combined_mass": bool(
                     truth_in_combined_mass
                 ),
-                # Keep the actual A+B IDs temporarily so we can
-                # union them with source C after spectral retrieval.
+
+                # Keep the actual IDs temporarily. These are
+                # persisted after source C has been generated.
+                "_same_candidates": (
+                    same_candidates
+                ),
+                "_opposite_candidates": (
+                    opposite_candidates
+                ),
                 "_combined_mass_candidates": (
                     combined_mass_candidates
                 ),
@@ -611,7 +633,10 @@ def main() -> None:
 
         batch_query_modes: list[str] = []
 
-        for local_structure_id, structure_index in enumerate(
+        for (
+            local_structure_id,
+            structure_index,
+        ) in enumerate(
             structure_indices
         ):
             query_indices = (
@@ -687,7 +712,10 @@ def main() -> None:
             )
         )
 
-        for local_structure_id, structure_index in enumerate(
+        for (
+            local_structure_id,
+            structure_index,
+        ) in enumerate(
             structure_indices
         ):
             spectral_candidates = (
@@ -714,7 +742,7 @@ def main() -> None:
             )
 
     # ---------------------------------------------------------
-    # Combine A + B + C.
+    # Combine A + B + C and preserve the candidate sets.
     # ---------------------------------------------------------
 
     for structure_index, result in enumerate(
@@ -729,8 +757,21 @@ def main() -> None:
         if spectral_candidates is None:
             raise RuntimeError(
                 "Missing spectral candidates "
-                f"for structure {structure_index}"
+                f"for structure "
+                f"{structure_index}"
             )
+
+        same_candidates = (
+            result[
+                "_same_candidates"
+            ]
+        )
+
+        opposite_candidates = (
+            result[
+                "_opposite_candidates"
+            ]
+        )
 
         combined_mass_candidates = (
             result[
@@ -790,6 +831,48 @@ def main() -> None:
         ] = bool(
             truth_in_all
         )
+
+        # -----------------------------------------------------
+        # Persist the candidate IDs for later ranking
+        # experiments.
+        #
+        # Candidate IDs are positions in candidate_keys. The
+        # candidate map saved below preserves that mapping.
+        # -----------------------------------------------------
+
+        result[
+            "same_candidate_ids"
+        ] = (
+            same_candidates.tolist()
+        )
+
+        result[
+            "opposite_candidate_ids"
+        ] = (
+            opposite_candidates.tolist()
+        )
+
+        result[
+            "spectral_candidate_ids"
+        ] = (
+            spectral_candidates.tolist()
+        )
+
+        result[
+            "hybrid_candidate_ids"
+        ] = (
+            all_candidates.tolist()
+        )
+
+        # Remove temporary NumPy-array fields before constructing
+        # the final DataFrame.
+        del result[
+            "_same_candidates"
+        ]
+
+        del result[
+            "_opposite_candidates"
+        ]
 
         del result[
             "_combined_mass_candidates"
@@ -1033,6 +1116,53 @@ def main() -> None:
         f"{len(comparison):,}"
     )
 
+    # ---------------------------------------------------------
+    # Protect against accidentally changing source A while
+    # developing Baseline 3.
+    # ---------------------------------------------------------
+
+    if not candidate_count_match.all():
+        print()
+        print(
+            "Candidate-count mismatches:"
+        )
+
+        print(
+            comparison.loc[
+                ~candidate_count_match,
+                [
+                    "inchikey14",
+                    "same_candidate_count",
+                    "candidate_count",
+                ],
+            ]
+            .head(20)
+            .to_string(
+                index=False
+            )
+        )
+
+    if not truth_match.all():
+        print()
+        print(
+            "Truth-status mismatches:"
+        )
+
+        print(
+            comparison.loc[
+                ~truth_match,
+                [
+                    "inchikey14",
+                    "truth_in_same",
+                    "truth_in_mass_filter",
+                ],
+            ]
+            .head(20)
+            .to_string(
+                index=False
+            )
+        )
+
     if not (
         candidate_count_match.all()
         and truth_match.all()
@@ -1049,8 +1179,10 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # Show the remaining misses. This is diagnostic only.
-    # Do not use truth status to make inference-time decisions.
+    # Show the remaining misses.
+    #
+    # This is diagnostic only. Truth status must not be used to
+    # make inference-time candidate-generation decisions.
     # ---------------------------------------------------------
 
     if still_missing.any():
@@ -1075,6 +1207,109 @@ def main() -> None:
                 index=False
             )
         )
+
+    # ---------------------------------------------------------
+    # Final artifact integrity checks before saving.
+    # ---------------------------------------------------------
+
+    if len(results) != len(
+        manifest
+    ):
+        raise RuntimeError(
+            "Candidate result count does not "
+            "match manifest."
+        )
+
+    hybrid_lengths_match = (
+        results[
+            "hybrid_candidate_ids"
+        ].map(len)
+        == results[
+            "all_candidate_count"
+        ]
+    )
+
+    if not hybrid_lengths_match.all():
+        raise RuntimeError(
+            "Persisted hybrid candidate IDs "
+            "do not match candidate counts."
+        )
+
+    # ---------------------------------------------------------
+    # Save frozen candidate-generation artifacts.
+    # ---------------------------------------------------------
+
+    RESULTS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    results.to_parquet(
+        CANDIDATE_RESULTS_PATH,
+        index=False,
+    )
+
+    candidate_map = pd.DataFrame(
+        {
+            "candidate_id": (
+                np.arange(
+                    len(candidate_keys),
+                    dtype=np.int64,
+                )
+            ),
+            "inchikey14": (
+                candidate_keys
+            ),
+        }
+    )
+
+    candidate_map.to_parquet(
+        CANDIDATE_MAP_PATH,
+        index=False,
+    )
+
+    print()
+    print(
+        "Saved candidate artifacts:"
+    )
+
+    print(
+        f"  {CANDIDATE_RESULTS_PATH}"
+    )
+
+    print(
+        f"  {CANDIDATE_MAP_PATH}"
+    )
+
+    print()
+    print(
+        "Artifact summary"
+    )
+
+    print(
+        f"  Structures:        "
+        f"{len(results):,}"
+    )
+
+    print(
+        f"  Candidate map:     "
+        f"{len(candidate_map):,}"
+    )
+
+    print(
+        f"  Hybrid coverage:   "
+        f"{results['truth_in_all'].mean():.2%}"
+    )
+
+    print(
+        f"  Hybrid median:     "
+        f"{results['all_candidate_count'].median():,.0f}"
+    )
+
+    print(
+        "  Candidate lengths: "
+        "PASS"
+    )
 
 
 if __name__ == "__main__":
