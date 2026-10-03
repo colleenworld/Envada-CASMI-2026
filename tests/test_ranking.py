@@ -1,11 +1,215 @@
 import numpy as np
+from scipy import sparse
 
 from casmi26.retrieval.ranking import (
     build_candidate_features,
     candidate_membership,
     candidate_scores,
     candidate_spectral_ranks,
+    candidate_scores_from_reference_rows,
 )
+
+
+def test_candidate_scores_from_reference_rows():
+    query_vectors = sparse.csr_matrix(
+        [
+            [1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    reference_vectors = sparse.csr_matrix(
+        [
+            [1.0, 0.0],
+            [0.8, 0.6],
+            [0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+
+    result = candidate_scores_from_reference_rows(
+        query_vectors=query_vectors,
+        query_modes=np.array(
+            ["positive"]
+        ),
+        reference_vectors=reference_vectors,
+        reference_modes=np.array(
+            [
+                "positive",
+                "positive",
+                "positive",
+            ]
+        ),
+        reference_candidate_ids=np.array(
+            [
+                0,
+                1,
+                2,
+            ],
+            dtype=np.int64,
+        ),
+        reference_rows=np.array(
+            [
+                0,
+                2,
+            ],
+            dtype=np.int64,
+        ),
+        candidate_count=3,
+    )
+
+    assert result[0] == 1.0
+    assert np.isneginf(
+        result[1]
+    )
+    assert result[2] == 0.0
+
+
+def test_candidate_scores_from_reference_rows_uses_max():
+    query_vectors = sparse.csr_matrix(
+        [
+            [1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    reference_vectors = sparse.csr_matrix(
+        [
+            [0.5, 0.5],
+            [0.9, 0.1],
+        ],
+        dtype=np.float32,
+    )
+
+    result = candidate_scores_from_reference_rows(
+        query_vectors=query_vectors,
+        query_modes=np.array(
+            ["positive"]
+        ),
+        reference_vectors=reference_vectors,
+        reference_modes=np.array(
+            [
+                "positive",
+                "positive",
+            ]
+        ),
+        reference_candidate_ids=np.array(
+            [
+                0,
+                0,
+            ],
+            dtype=np.int64,
+        ),
+        reference_rows=np.array(
+            [
+                0,
+                1,
+            ],
+            dtype=np.int64,
+        ),
+        candidate_count=1,
+    )
+
+    np.testing.assert_allclose(
+        result[0],
+        0.9,
+    )
+
+
+def test_candidate_scores_from_reference_rows_respects_mode():
+    query_vectors = sparse.csr_matrix(
+        [
+            [1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    reference_vectors = sparse.csr_matrix(
+        [
+            [1.0, 0.0],
+            [0.5, 0.5],
+        ],
+        dtype=np.float32,
+    )
+
+    result = candidate_scores_from_reference_rows(
+        query_vectors=query_vectors,
+        query_modes=np.array(
+            ["positive"]
+        ),
+        reference_vectors=reference_vectors,
+        reference_modes=np.array(
+            [
+                "negative",
+                "positive",
+            ]
+        ),
+        reference_candidate_ids=np.array(
+            [
+                0,
+                1,
+            ],
+            dtype=np.int64,
+        ),
+        reference_rows=np.array(
+            [
+                0,
+                1,
+            ],
+            dtype=np.int64,
+        ),
+        candidate_count=2,
+    )
+
+    assert np.isneginf(
+        result[0]
+    )
+
+    np.testing.assert_allclose(
+        result[1],
+        0.5,
+    )
+
+
+def test_candidate_scores_from_reference_rows_empty():
+    query_vectors = sparse.csr_matrix(
+        [
+            [1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    reference_vectors = sparse.csr_matrix(
+        [
+            [1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    result = candidate_scores_from_reference_rows(
+        query_vectors=query_vectors,
+        query_modes=np.array(
+            ["positive"]
+        ),
+        reference_vectors=reference_vectors,
+        reference_modes=np.array(
+            ["positive"]
+        ),
+        reference_candidate_ids=np.array(
+            [0],
+            dtype=np.int64,
+        ),
+        reference_rows=np.array(
+            [],
+            dtype=np.int64,
+        ),
+        candidate_count=1,
+    )
+
+    assert np.isneginf(
+        result[0]
+    )
+
 def test_candidate_scores():
     scores = np.array(
         [

@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from casmi26.chemistry.adducts import neutral_mass
 from casmi26.retrieval.index import (
     load_retrieval_index,
 )
@@ -11,6 +12,7 @@ from casmi26.retrieval.indexed import (
 )
 from casmi26.retrieval.ranking import (
     build_candidate_features,
+    candidate_scores_from_reference_rows,
 )
 
 
@@ -32,6 +34,11 @@ CANDIDATE_MAP_PATH = Path(
     "retrieval_dev_baseline3_candidate_map.parquet"
 )
 
+BASELINE2_PATH = Path(
+    "data/processed/results/"
+    "retrieval_dev_baseline2_frozen.parquet"
+)
+
 OUTPUT_PATH = Path(
     "data/processed/results/"
     "retrieval_dev_baseline3_ranking_features.parquet"
@@ -42,6 +49,47 @@ BLOCK_SIZE = 25_000
 MAX_QUERY_SPECTRA_PER_BATCH = 64
 
 SPECTRAL_TOP_K = 25
+
+TOLERANCE_DA = 0.01
+
+
+def infer_neutral_masses(
+    precursor_mzs: np.ndarray,
+    adducts: np.ndarray,
+) -> np.ndarray:
+    """
+    Infer neutral masses from precursor m/z and known adducts.
+    """
+    result = np.full(
+        len(precursor_mzs),
+        np.nan,
+        dtype=np.float64,
+    )
+
+    for index, (
+        precursor_mz,
+        adduct,
+    ) in enumerate(
+        zip(
+            precursor_mzs,
+            adducts,
+            strict=True,
+        )
+    ):
+        if pd.isna(
+            precursor_mz
+        ):
+            continue
+
+        mass = neutral_mass(
+            float(precursor_mz),
+            str(adduct),
+        )
+
+        if mass is not None:
+            result[index] = mass
+
+    return result
 
 
 def build_reference_mask(
@@ -71,8 +119,12 @@ def build_reference_mask(
             )
             not in query_pairs
             for key, library in zip(
-                metadata["inchikey14"],
-                metadata["ingest_lib"],
+                metadata[
+                    "inchikey14"
+                ],
+                metadata[
+                    "ingest_lib"
+                ],
                 strict=True,
             )
         ),
@@ -146,6 +198,10 @@ def main() -> None:
         CANDIDATE_MAP_PATH
     )
 
+    baseline2 = pd.read_parquet(
+        BASELINE2_PATH
+    )
+
     metadata, vectors = (
         load_retrieval_index(
             INDEX_DIR
@@ -175,6 +231,27 @@ def main() -> None:
         raise RuntimeError(
             "Candidate artifact order does not "
             "match retrieval-dev manifest."
+        )
+
+    if len(baseline2) != len(
+        manifest
+    ):
+        raise RuntimeError(
+            "Baseline 2 and manifest have "
+            "different structure counts."
+        )
+
+    if not np.array_equal(
+        baseline2[
+            "inchikey14"
+        ].astype(str).to_numpy(),
+        manifest[
+            "inchikey14"
+        ].astype(str).to_numpy(),
+    ):
+        raise RuntimeError(
+            "Baseline 2 order does not match "
+            "the retrieval-dev manifest."
         )
 
     expected_candidate_ids = np.arange(
@@ -210,6 +287,13 @@ def main() -> None:
     candidate_count = len(
         candidate_keys
     )
+
+    candidate_id_by_key = {
+        key: candidate_id
+        for candidate_id, key in enumerate(
+            candidate_keys
+        )
+    }
 
     print(
         f"Structures: "
@@ -249,7 +333,9 @@ def main() -> None:
         metadata.iloc[
             reference_indices
         ]
-        .reset_index(drop=True)
+        .reset_index(
+            drop=True
+        )
     )
 
     reference_vectors = vectors[
@@ -298,6 +384,15 @@ def main() -> None:
         .to_numpy()
     )
 
+    reference_masses = infer_neutral_masses(
+        reference_metadata[
+            "precursor_mz"
+        ].to_numpy(),
+        reference_metadata[
+            "adduct"
+        ].to_numpy(),
+    )
+
     print(
         f"Reference spectra: "
         f"{len(reference_metadata):,}"
@@ -309,7 +404,8 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # Locate the frozen query spectra.
+    # Locate the frozen query spectra and calculate their
+    # neutral masses.
     # ---------------------------------------------------------
 
     metadata_keys = (
@@ -332,6 +428,10 @@ def main() -> None:
         np.ndarray
     ] = []
 
+    query_masses_by_structure: list[
+        np.ndarray
+    ] = []
+
     for row in manifest.itertuples(
         index=False
     ):
@@ -344,7 +444,10 @@ def main() -> None:
         )
 
         query_indices = np.flatnonzero(
-            (metadata_keys == truth_key)
+            (
+                metadata_keys
+                == truth_key
+            )
             & (
                 metadata_libraries
                 == query_library
@@ -362,6 +465,21 @@ def main() -> None:
             query_indices
         )
 
+        query_metadata = metadata.iloc[
+            query_indices
+        ]
+
+        query_masses_by_structure.append(
+            infer_neutral_masses(
+                query_metadata[
+                    "precursor_mz"
+                ].to_numpy(),
+                query_metadata[
+                    "adduct"
+                ].to_numpy(),
+            )
+        )
+
     batches = build_query_batches(
         query_indices_by_structure,
         MAX_QUERY_SPECTRA_PER_BATCH,
@@ -377,6 +495,10 @@ def main() -> None:
     #
     # We calculate the full score vector temporarily for each
     # batch, but persist only the hybrid candidate scores.
+    #
+    # Separately, for each structure we reproduce Baseline 2's
+    # mass-filtered reference-row scoring. That produces the
+    # same_mass_cosine feature.
     # ---------------------------------------------------------
 
     feature_frames: list[
@@ -384,8 +506,11 @@ def main() -> None:
     ] = []
 
     spectral_order_matches = 0
-
     spectral_order_checked = 0
+
+    baseline2_rank_matches = 0
+    baseline2_rank_checked = 0
+    baseline2_fallback_count = 0
 
     for batch_number, structure_indices in enumerate(
         batches,
@@ -508,9 +633,145 @@ def main() -> None:
                 dtype=np.int64,
             )
 
+            # -------------------------------------------------
+            # Full same-polarity score.
+            #
+            # This is the existing ranking feature used by the
+            # spectral candidate source.
+            # -------------------------------------------------
+
             scores = batch_scores[
                 local_structure_id
             ]
+
+            # -------------------------------------------------
+            # Reconstruct the exact Baseline 2 reference-row
+            # selection for this query.
+            # -------------------------------------------------
+
+            query_indices = (
+                query_indices_by_structure[
+                    structure_index
+                ]
+            )
+
+            query_modes = (
+                metadata.iloc[
+                    query_indices
+                ][
+                    "ionization_mode"
+                ]
+                .astype(str)
+                .to_numpy()
+            )
+
+            query_masses = (
+                query_masses_by_structure[
+                    structure_index
+                ]
+            )
+
+            usable_query_mass = np.isfinite(
+                query_masses
+            )
+
+            selected_reference_rows: set[
+                int
+            ] = set()
+
+            if usable_query_mass.any():
+                for (
+                    query_mode,
+                    query_mass,
+                ) in zip(
+                    query_modes[
+                        usable_query_mass
+                    ],
+                    query_masses[
+                        usable_query_mass
+                    ],
+                    strict=True,
+                ):
+                    matches = np.flatnonzero(
+                        (
+                            reference_modes
+                            == query_mode
+                        )
+                        & np.isfinite(
+                            reference_masses
+                        )
+                        & (
+                            np.abs(
+                                reference_masses
+                                - query_mass
+                            )
+                            <= TOLERANCE_DA
+                        )
+                    )
+
+                    selected_reference_rows.update(
+                        int(row)
+                        for row in matches
+                    )
+
+            mass_reference_rows = np.asarray(
+                sorted(
+                    selected_reference_rows
+                ),
+                dtype=np.int64,
+            )
+
+            used_fallback = (
+                not usable_query_mass.any()
+                or len(
+                    mass_reference_rows
+                )
+                == 0
+            )
+
+            if used_fallback:
+                baseline2_reference_rows = (
+                    np.arange(
+                        len(
+                            reference_metadata
+                        ),
+                        dtype=np.int64,
+                    )
+                )
+
+                baseline2_fallback_count += 1
+            else:
+                baseline2_reference_rows = (
+                    mass_reference_rows
+                )
+
+            baseline2_scores = (
+                candidate_scores_from_reference_rows(
+                    query_vectors=vectors[
+                        query_indices
+                    ],
+                    query_modes=query_modes,
+                    reference_vectors=(
+                        reference_vectors
+                    ),
+                    reference_modes=(
+                        reference_modes
+                    ),
+                    reference_candidate_ids=(
+                        reference_candidate_ids
+                    ),
+                    reference_rows=(
+                        baseline2_reference_rows
+                    ),
+                    candidate_count=(
+                        candidate_count
+                    ),
+                )
+            )
+
+            # -------------------------------------------------
+            # Build the existing hybrid candidate features.
+            # -------------------------------------------------
 
             features = (
                 build_candidate_features(
@@ -531,7 +792,7 @@ def main() -> None:
             )
 
             # -------------------------------------------------
-            # Consistency check:
+            # Spectral consistency check.
             #
             # Reconstruct the Top-25 from the full score vector
             # using exactly the deterministic ordering used by
@@ -577,6 +838,10 @@ def main() -> None:
             ):
                 spectral_order_matches += 1
 
+            # -------------------------------------------------
+            # Frozen Baseline 2 rank consistency check.
+            # -------------------------------------------------
+
             structure_key = str(
                 candidate_row[
                     "inchikey14"
@@ -588,6 +853,68 @@ def main() -> None:
                     "query_library"
                 ]
             )
+
+            truth_candidate_id = (
+                candidate_id_by_key.get(
+                    structure_key
+                )
+            )
+
+            if truth_candidate_id is None:
+                calculated_baseline2_rank = (
+                    None
+                )
+            else:
+                truth_score = (
+                    baseline2_scores[
+                        truth_candidate_id
+                    ]
+                )
+
+                if np.isfinite(
+                    truth_score
+                ):
+                    calculated_baseline2_rank = (
+                        1
+                        + int(
+                            np.sum(
+                                baseline2_scores
+                                > truth_score
+                            )
+                        )
+                    )
+                else:
+                    calculated_baseline2_rank = (
+                        None
+                    )
+
+            frozen_rank = baseline2.iloc[
+                structure_index
+            ][
+                "rank"
+            ]
+
+            frozen_baseline2_rank = (
+                None
+                if pd.isna(
+                    frozen_rank
+                )
+                else int(
+                    frozen_rank
+                )
+            )
+
+            baseline2_rank_checked += 1
+
+            if (
+                calculated_baseline2_rank
+                == frozen_baseline2_rank
+            ):
+                baseline2_rank_matches += 1
+
+            # -------------------------------------------------
+            # Candidate-level feature rows.
+            # -------------------------------------------------
 
             candidate_ids = features[
                 "candidate_id"
@@ -640,6 +967,14 @@ def main() -> None:
                             "same_polarity_cosine"
                         ]
                     ),
+                    "same_mass_cosine": (
+                        baseline2_scores[
+                            candidate_ids
+                        ]
+                    ),
+                    "baseline2_fallback": (
+                        used_fallback
+                    ),
                 }
             )
 
@@ -676,24 +1011,35 @@ def main() -> None:
     )
 
     print(
-        f"Rows:               "
+        f"Rows:                "
         f"{len(features):,}"
     )
 
     print(
-        f"Structures:         "
+        f"Structures:          "
         f"{features['inchikey14'].nunique():,}"
     )
 
     print(
-        f"Truth rows:         "
+        f"Truth rows:          "
         f"{features['is_truth'].sum():,}"
     )
 
     print(
-        f"Spectral checks:    "
+        f"Spectral checks:     "
         f"{spectral_order_matches:,} / "
         f"{spectral_order_checked:,}"
+    )
+
+    print(
+        f"Baseline 2 ranks:    "
+        f"{baseline2_rank_matches:,} / "
+        f"{baseline2_rank_checked:,}"
+    )
+
+    print(
+        f"Baseline 2 fallbacks:"
+        f" {baseline2_fallback_count:,}"
     )
 
     # ---------------------------------------------------------
@@ -753,6 +1099,21 @@ def main() -> None:
             "reproduce the frozen candidate artifact."
         )
 
+    if (
+        baseline2_rank_matches
+        != baseline2_rank_checked
+    ):
+        raise RuntimeError(
+            "Mass-filtered scoring does not "
+            "exactly reproduce frozen Baseline 2."
+        )
+
+    if baseline2_fallback_count != 53:
+        raise RuntimeError(
+            "Baseline 2 fallback count does "
+            "not match the frozen baseline."
+        )
+
     print()
     print(
         "PASS: candidate counts match "
@@ -766,6 +1127,16 @@ def main() -> None:
 
     print(
         "PASS: spectral Top-25 ordering "
+        "is exactly reproduced."
+    )
+
+    print(
+        "PASS: Baseline 2 ranks are "
+        "exactly reproduced."
+    )
+
+    print(
+        "PASS: Baseline 2 fallback count "
         "is exactly reproduced."
     )
 
