@@ -14,9 +14,9 @@ BASELINE2_PATH = Path(
     "retrieval_dev_baseline2_frozen.parquet"
 )
 
-BASELINE3B_PATH = Path(
+OUTPUT_PATH = Path(
     "data/processed/results/"
-    "retrieval_dev_baseline3b.parquet"
+    "retrieval_dev_baseline3c.parquet"
 )
 
 
@@ -24,28 +24,29 @@ def source_tier(
     group: pd.DataFrame,
 ) -> np.ndarray:
     """
-    Assign the frozen Baseline 3 candidate-source hierarchy:
+    Assign the Baseline 3 candidate-source hierarchy.
 
-        1. same-polarity mass candidate
-        2. opposite-polarity mass candidate
-        3. spectral-only candidate
+    Tier 1:
+        Same-polarity neutral-mass candidates.
 
-    Membership in an earlier source always wins.
+    Tier 2:
+        Opposite-polarity neutral-mass candidates that are not
+        already Tier 1.
+
+    Tier 3:
+        Spectral Top-25 candidates that are not already Tier 1
+        or Tier 2.
     """
-    in_same = (
-        group[
-            "in_same_mass"
-        ].to_numpy(
-            dtype=bool
-        )
+    in_same = group[
+        "in_same_mass"
+    ].to_numpy(
+        dtype=bool
     )
 
-    in_opposite = (
-        group[
-            "in_opposite_mass"
-        ].to_numpy(
-            dtype=bool
-        )
+    in_opposite = group[
+        "in_opposite_mass"
+    ].to_numpy(
+        dtype=bool
     )
 
     tiers = np.full(
@@ -71,12 +72,13 @@ def truth_source_tier(
     """
     Return the source tier containing the truth candidate.
 
-    None means the truth is absent from the hybrid candidate set.
+    None means the truth is absent from the frozen A+B+C
+    candidate set.
     """
     truth = group[
         group[
             "is_truth"
-        ]
+        ].astype(bool)
     ]
 
     if len(truth) == 0:
@@ -87,15 +89,17 @@ def truth_source_tier(
             "Expected exactly one truth candidate row."
         )
 
+    truth_row = truth.iloc[0]
+
     if bool(
-        truth.iloc[0][
+        truth_row[
             "in_same_mass"
         ]
     ):
         return 1
 
     if bool(
-        truth.iloc[0][
+        truth_row[
             "in_opposite_mass"
         ]
     ):
@@ -110,31 +114,41 @@ def rank_query(
     """
     Rank one retrieval-dev query using Baseline 3c.
 
-    Normal mass-filtered query:
+    Normal query:
 
         Tier 1:
-            same-polarity mass candidates,
-            ordered by Baseline 2's mass-filtered cosine.
+            Same-polarity mass candidates ranked by
+            same_mass_cosine.
 
         Tier 2:
-            opposite-polarity mass candidates not already in Tier 1,
-            ordered by unrestricted same-polarity cosine.
+            Opposite-polarity mass candidates not already
+            in Tier 1, ranked by same_polarity_cosine.
 
         Tier 3:
-            spectral-only candidates,
-            ordered by unrestricted same-polarity cosine.
+            Spectral-only candidates ranked by
+            same_polarity_cosine.
 
-    Baseline 2 fallback query:
+    Fallback query:
 
-        Preserve the fallback semantics and rank the entire hybrid
-        candidate set by unrestricted same-polarity cosine.
+        Rank the entire frozen hybrid candidate set by
+        same_polarity_cosine.
 
-    Candidate ID is the deterministic final tie-breaker.
+    Important:
+        We intentionally retain candidates whose cosine score is
+        -inf.
+
+        In particular, an opposite-polarity mass candidate may
+        have useful mass evidence despite having no compatible
+        same-polarity reference spectrum. Removing such candidates
+        was experimentally shown to reduce hybrid Top-25 recovery.
+
+        candidate_id provides deterministic ordering for tied
+        scores, including -inf.
     """
     truth = group[
         group[
             "is_truth"
-        ]
+        ].astype(bool)
     ]
 
     if len(truth) == 0:
@@ -166,9 +180,9 @@ def rank_query(
     ranked = group.copy()
 
     if used_fallback:
-        # Baseline 2 fallback used unrestricted same-polarity
-        # retrieval. Preserve that ordering rather than imposing
-        # the A/B/C source hierarchy.
+        # Preserve the original Baseline 3c fallback behavior:
+        # rank the entire hybrid candidate set, including candidates
+        # without a finite same-polarity cosine score.
         ranked = ranked.sort_values(
             by=[
                 "same_polarity_cosine",
@@ -188,10 +202,10 @@ def rank_query(
             ranked
         )
 
-        # Tier 1 uses the exact Baseline 2 mass-filtered score.
+        # Tier 1 must use the exact Baseline 2 mass-compatible
+        # scoring signal.
         #
-        # Tiers 2 and 3 are rescue candidates and therefore use
-        # unrestricted same-polarity cosine.
+        # Rescue tiers use the unrestricted same-polarity cosine.
         ranked[
             "_ranking_score"
         ] = np.where(
@@ -283,30 +297,18 @@ def calculate_metrics(
         "top25": float(
             (
                 ranks <= 25
-            ).fillna(
-                False
-            ).mean()
+            )
+            .fillna(False)
+            .mean()
         ),
         "candidate_recall": float(
-            ranks.notna().mean()
+            results[
+                "truth_source_tier"
+            ]
+            .notna()
+            .mean()
         ),
     }
-
-
-def format_rank(
-    value: float | int | None,
-) -> str:
-    if value is None:
-        return "-"
-
-    if pd.isna(
-        value
-    ):
-        return "-"
-
-    return str(
-        int(value)
-    )
 
 
 def main() -> None:
@@ -348,10 +350,6 @@ def main() -> None:
             f"columns: {sorted(missing_columns)}"
         )
 
-    # ---------------------------------------------------------
-    # Rank every query.
-    # ---------------------------------------------------------
-
     rows: list[
         dict[str, object]
     ] = []
@@ -376,9 +374,7 @@ def main() -> None:
             .unique()
         )
 
-        if len(
-            fallback_values
-        ) != 1:
+        if len(fallback_values) != 1:
             raise RuntimeError(
                 "baseline2_fallback is not "
                 "constant within a query."
@@ -386,32 +382,24 @@ def main() -> None:
 
         rows.append(
             {
-                "inchikey14": (
-                    str(
-                        structure_key
-                    )
+                "inchikey14": str(
+                    structure_key
                 ),
-                "query_library": (
-                    str(
-                        query_library
-                    )
+                "query_library": str(
+                    query_library
                 ),
-                "rank": (
-                    rank_query(
-                        group
-                    )
+                "rank": rank_query(
+                    group
                 ),
                 "truth_source_tier": (
                     truth_source_tier(
                         group
                     )
                 ),
-                "baseline2_fallback": (
-                    bool(
-                        fallback_values[
-                            0
-                        ]
-                    )
+                "baseline2_fallback": bool(
+                    fallback_values[
+                        0
+                    ]
                 ),
             }
         )
@@ -425,10 +413,6 @@ def main() -> None:
             "Expected exactly 2,000 "
             "retrieval-dev results."
         )
-
-    # ---------------------------------------------------------
-    # Baseline 3c metrics.
-    # ---------------------------------------------------------
 
     metrics = calculate_metrics(
         results
@@ -448,9 +432,7 @@ def main() -> None:
         ]
         .rename(
             columns={
-                "rank": (
-                    "baseline2_rank"
-                )
+                "rank": "baseline2_rank",
             }
         )
     )
@@ -465,32 +447,28 @@ def main() -> None:
         validate="one_to_one",
     )
 
-    if comparison[
+    baseline2_ranks = comparison[
         "baseline2_rank"
-    ].isna().all():
-        raise RuntimeError(
-            "Baseline 2 comparison failed."
-        )
+    ]
 
-    baseline2_results = (
-        comparison[
-            [
-                "inchikey14",
-                "query_library",
-                "baseline2_rank",
-            ]
-        ]
-        .rename(
-            columns={
-                "baseline2_rank": "rank"
-            }
-        )
+    baseline2_mrr = float(
+        baseline2_ranks.map(
+            reciprocal_rank_at_25
+        ).mean()
     )
 
-    baseline2_metrics = (
-        calculate_metrics(
-            baseline2_results
+    baseline2_top1 = float(
+        (
+            baseline2_ranks == 1
+        ).mean()
+    )
+
+    baseline2_top25 = float(
+        (
+            baseline2_ranks <= 25
         )
+        .fillna(False)
+        .mean()
     )
 
     # ---------------------------------------------------------
@@ -536,17 +514,7 @@ def main() -> None:
     ].copy()
 
     # ---------------------------------------------------------
-    # Rank equality diagnostics.
-    #
-    # For non-fallback Tier-1 truths, Baseline 3c is intended to
-    # use exactly the same score signal as Baseline 2.
-    #
-    # Differences here should therefore primarily expose the
-    # distinction between Baseline 2's optimistic tie-rank:
-    #
-    #     1 + count(score > truth_score)
-    #
-    # and the deterministic ordered-list ranking used by 3c.
+    # Baseline 2 preservation diagnostics.
     # ---------------------------------------------------------
 
     tier1_nonfallback = comparison[
@@ -577,10 +545,6 @@ def main() -> None:
             "rank_matches_baseline2"
         ].sum()
     )
-
-    # ---------------------------------------------------------
-    # Fallback diagnostics.
-    # ---------------------------------------------------------
 
     fallback_results = comparison[
         comparison[
@@ -680,17 +644,17 @@ def main() -> None:
 
     print(
         f"MRR@25:           "
-        f"{baseline2_metrics['mrr']:.4f}"
+        f"{baseline2_mrr:.4f}"
     )
 
     print(
         f"Top-1:            "
-        f"{baseline2_metrics['top1']:.2%}"
+        f"{baseline2_top1:.2%}"
     )
 
     print(
         f"Top-25:           "
-        f"{baseline2_metrics['top25']:.2%}"
+        f"{baseline2_top25:.2%}"
     )
 
     print()
@@ -700,21 +664,21 @@ def main() -> None:
 
     print(
         f"MRR@25:           "
-        f"{metrics['mrr'] - baseline2_metrics['mrr']:+.4f}"
+        f"{metrics['mrr'] - baseline2_mrr:+.4f}"
     )
 
     print(
         f"Top-1:            "
-        f"{100 * (metrics['top1'] - baseline2_metrics['top1']):+.2f} pp"
+        f"{100 * (metrics['top1'] - baseline2_top1):+.2f} pp"
     )
 
     print(
         f"Top-25:           "
-        f"{100 * (metrics['top25'] - baseline2_metrics['top25']):+.2f} pp"
+        f"{100 * (metrics['top25'] - baseline2_top25):+.2f} pp"
     )
 
     # ---------------------------------------------------------
-    # Truth tiers.
+    # Truth source tiers.
     # ---------------------------------------------------------
 
     print()
@@ -743,7 +707,9 @@ def main() -> None:
     absent_truth = int(
         results[
             "truth_source_tier"
-        ].isna().sum()
+        ]
+        .isna()
+        .sum()
     )
 
     print(
@@ -752,7 +718,7 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # Reproduction diagnostics.
+    # Preservation report.
     # ---------------------------------------------------------
 
     print()
@@ -787,7 +753,7 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # Transition matrix.
+    # Top-25 transition matrix.
     # ---------------------------------------------------------
 
     print()
@@ -841,7 +807,7 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # Regression/recovery source tiers.
+    # Recovery/regression source tiers.
     # ---------------------------------------------------------
 
     if len(regressions):
@@ -877,10 +843,6 @@ def main() -> None:
             .sort_index()
             .to_string()
         )
-
-    # ---------------------------------------------------------
-    # Detailed transitions.
-    # ---------------------------------------------------------
 
     detail_columns = [
         "inchikey14",
@@ -943,11 +905,7 @@ def main() -> None:
         )
 
     # ---------------------------------------------------------
-    # Tier-1 rank mismatches.
-    #
-    # These are especially interesting because the score signal
-    # should now be identical to Baseline 2. Any remaining
-    # difference should be investigated as an ordering/tie issue.
+    # Tier-1 mismatches.
     # ---------------------------------------------------------
 
     tier1_mismatches = tier1_nonfallback[
@@ -989,26 +947,22 @@ def main() -> None:
                     "rank",
                 ]
             )
-            .head(
-                100
-            )
             .to_string(
                 index=False
             )
         )
 
     # ---------------------------------------------------------
-    # Save the result so later experiments can compare against
-    # this exact Baseline 3c run.
+    # Save only after the evaluation has completed.
     # ---------------------------------------------------------
 
-    output_path = Path(
-        "data/processed/results/"
-        "retrieval_dev_baseline3c.parquet"
+    OUTPUT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
     results.to_parquet(
-        output_path,
+        OUTPUT_PATH,
         index=False,
     )
 
@@ -1016,8 +970,9 @@ def main() -> None:
     print(
         "Saved:"
     )
+
     print(
-        f"  {output_path}"
+        f"  {OUTPUT_PATH}"
     )
 
 
