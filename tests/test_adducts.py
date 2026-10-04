@@ -5,6 +5,37 @@ from casmi26.chemistry.adducts import (
     neutral_mass,
 )
 
+@pytest.mark.parametrize(
+    ("adduct", "neutral"),
+    [
+        ("[M+H]+", 300.123),
+        ("[M-H]-", 300.123),
+        ("[M+Na]+", 300.123),
+        ("[2M+H]+", 300.123),
+        ("[2M+Na]+", 300.123),
+        ("[2M-H]-", 300.123),
+        ("[M+2H]2+", 300.123),
+        ("[M+3H]3+", 300.123),
+    ],
+)
+def test_adduct_round_trip(
+    adduct: str,
+    neutral: float,
+) -> None:
+    definition = ADDUCTS[adduct]
+
+    precursor = definition.precursor_mz(
+        neutral
+    )
+
+    recovered = definition.neutral_mass(
+        precursor
+    )
+
+    assert recovered == pytest.approx(
+        neutral,
+        abs=1e-9,
+    )
 
 @pytest.mark.parametrize(
     ("adduct", "neutral", "expected_precursor"),

@@ -14,75 +14,116 @@ H2O = 18.010565
 
 @dataclass(frozen=True)
 class Adduct:
-    """
-    Transformation between neutral molecular mass M and observed m/z.
-
-    For the singly charged adducts used here:
-
-        observed_mz = neutral_mass + mass_shift
-
-    Therefore:
-
-        neutral_mass = observed_mz - mass_shift
-    """
-
     name: str
     mass_shift: float
+    molecule_count: int = 1
+    charge: int = 1
 
-    def neutral_mass(self, precursor_mz: float) -> float:
-        return precursor_mz - self.mass_shift
+    def neutral_mass(
+        self,
+        precursor_mz: float,
+    ) -> float:
+        return (
+            precursor_mz * abs(self.charge)
+            - self.mass_shift
+        ) / self.molecule_count
 
-    def precursor_mz(self, neutral_mass: float) -> float:
-        return neutral_mass + self.mass_shift
+    def precursor_mz(
+        self,
+        neutral_mass: float,
+    ) -> float:
+        return (
+            self.molecule_count * neutral_mass
+            + self.mass_shift
+        ) / abs(self.charge)
 
 ADDUCTS: dict[str, Adduct] = {
-    "[M]-": Adduct(
-        name="[M]-",
-        mass_shift=0.0,
-    ),
     "[M]+": Adduct(
-        name="[M]+",
-        mass_shift=0.0,
+        "[M]+",
+        0.0,
     ),
+    "[M]-": Adduct(
+        "[M]-",
+        0.0,
+        charge=-1,
+    ),
+
     "[M+H]+": Adduct(
-        name="[M+H]+",
-        mass_shift=PROTON,
+        "[M+H]+",
+        PROTON,
     ),
     "[M-H]-": Adduct(
-        name="[M-H]-",
-        mass_shift=-PROTON,
+        "[M-H]-",
+        -PROTON,
+        charge=-1,
     ),
+
     "[M+Na]+": Adduct(
-        name="[M+Na]+",
-        mass_shift=NA,
+        "[M+Na]+",
+        NA,
     ),
     "[M+K]+": Adduct(
-        name="[M+K]+",
-        mass_shift=K,
+        "[M+K]+",
+        K,
     ),
     "[M+NH4]+": Adduct(
-        name="[M+NH4]+",
-        mass_shift=NH4,
+        "[M+NH4]+",
+        NH4,
     ),
+
     "[M+CH2O2-H]-": Adduct(
-        name="[M+CH2O2-H]-",
-        mass_shift=FORMIC_ACID - PROTON,
+        "[M+CH2O2-H]-",
+        FORMIC_ACID - PROTON,
+        charge=-1,
     ),
     "[M+Cl]-": Adduct(
-        name="[M+Cl]-",
-        mass_shift=CL,
+        "[M+Cl]-",
+        CL,
+        charge=-1,
     ),
+
     "[M-H2O+H]+": Adduct(
-        name="[M-H2O+H]+",
-        mass_shift=PROTON - H2O,
+        "[M-H2O+H]+",
+        PROTON - H2O,
     ),
     "[M-2H2O+H]+": Adduct(
-        name="[M-2H2O+H]+",
-        mass_shift=PROTON - (2 * H2O),
+        "[M-2H2O+H]+",
+        PROTON - 2 * H2O,
     ),
     "[M-H2O-H]-": Adduct(
-        name="[M-H2O-H]-",
-        mass_shift=-H2O - PROTON,
+        "[M-H2O-H]-",
+        -H2O - PROTON,
+        charge=-1,
+    ),
+
+    # Multimers
+    "[2M+H]+": Adduct(
+        "[2M+H]+",
+        PROTON,
+        molecule_count=2,
+    ),
+    "[2M+Na]+": Adduct(
+        "[2M+Na]+",
+        NA,
+        molecule_count=2,
+    ),
+    "[2M-H]-": Adduct(
+        "[2M-H]-",
+        -PROTON,
+        molecule_count=2,
+        charge=-1,
+    ),
+
+    # Multiply charged
+    "[M+2H]2+": Adduct(
+        "[M+2H]2+",
+        2 * PROTON,
+        charge=2,
+    ),
+    "[M+3H]3+": Adduct(
+        "[M+3H]3+",
+        3 * PROTON,
+        charge=3,
     ),
 }
 
