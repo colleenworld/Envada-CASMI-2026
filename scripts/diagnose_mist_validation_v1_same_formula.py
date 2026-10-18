@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem
-
+from rdkit.Chem import rdFingerprintGenerator
 
 ROOT = Path("data/processed/mist/validation_500")
 
@@ -41,12 +41,12 @@ def make_fp(smiles: str):
     if mol is None:
         return None
 
-    return AllChem.GetMorganFingerprintAsBitVect(
-        mol,
-        radius=RADIUS,
-        nBits=N_BITS,
-    )
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(
+        radius=2,
+        fpSize=4096,)
 
+    # 2. Generate the fingerprint from the molecule
+    return mfpgen.GetFingerprint(mol)
 
 def build_structure_catalog():
     """

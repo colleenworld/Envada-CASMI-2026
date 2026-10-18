@@ -1,11 +1,21 @@
+from __future__ import annotations
+
+import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
 PROJECT_ROOT = Path(
-    "/home/colleen/PycharmProjects/Envada-CASMI-2026"
+    os.environ.get(
+        "CASMI26_PROJECT_ROOT",
+        Path(__file__).resolve().parent.parent,
+    )
 )
 
 TEST_PATH = (
@@ -29,147 +39,542 @@ OUTPUT_PATH = (
 )
 
 
-#
-# Frozen validation settings.
-#
-PPM_TOLERANCE = 10.0
+# ---------------------------------------------------------------------------
+# Frozen inference parameters
+# ---------------------------------------------------------------------------
 
+FORMULA_TOLERANCE_PPM = 10.0
 
-#
-# Adduct mass shifts.
-#
-# neutral_mass = precursor_mz - shift
-#
-# For [M-H]- the shift is negative, so this correctly becomes:
-#
-#     neutral_mass = precursor_mz + proton_mass
-#
-ADDUCT_MASS_SHIFT = {
-    "[M+H]+": +1.007276466621,
+ADDUCT_SHIFTS = {
+    "[M+H]+": 1.007276466621,
     "[M-H]-": -1.007276466621,
-    "[M+Na]+": +22.989218,
-    "[M+NH4]+": +18.033823,
-    "[M+CH2O2-H]-": +44.998201,
+    "[M+Na]+": 22.989218,
+    "[M+K]+": 38.963158,
+    "[M+NH4]+": 18.033823,
+    "[M+CH2O2-H]-": 44.998201,
+    "[M+Cl]-": 34.969402,
 }
+
+PRIMARY_ADDUCT = "[M+H]+"
+
+
+# ---------------------------------------------------------------------------
+# Private-rerun diagnostics
+# ---------------------------------------------------------------------------
+
+DEBUG_STAGE = (
+    os.environ.get(
+        "CASMI26_DEBUG_STAGE",
+        "",
+    )
+    .strip()
+)
+
+
+def stop_after(
+    stage: str,
+) -> bool:
+    if DEBUG_STAGE == stage:
+        print()
+        print(
+            f"DEBUG: stopping successfully after {stage}"
+        )
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+def neutral_mass_from_adduct(
+    precursor_mz: float,
+    adduct: str,
+) -> float:
+    shift = ADDUCT_SHIFTS.get(
+        adduct
+    )
+
+    if shift is None:
+        return np.nan
+
+    if not np.isfinite(
+        precursor_mz
+    ):
+        return np.nan
+
+    return (
+        float(precursor_mz)
+        - shift
+    )
 
 
 def ppm_error(
     observed_mass: float,
-    expected_mass: float,
+    theoretical_mass: float,
 ) -> float:
+    if (
+        not np.isfinite(
+            observed_mass
+        )
+        or not np.isfinite(
+            theoretical_mass
+        )
+        or theoretical_mass <= 0
+    ):
+        return np.nan
+
     return (
-        (observed_mass - expected_mass)
-        / expected_mass
+        (
+            observed_mass
+            - theoretical_mass
+        )
+        / theoretical_mass
         * 1_000_000.0
     )
 
 
-def mist_usable_peaks(
+def is_mist_processable(
     mzs,
     intensities,
     precursor_mz: float,
-) -> int:
-    """
-    Mirror the important MIST process_spec_file behavior.
-
-    MIST keeps peaks satisfying approximately:
-
-        mz <= precursor_mz + 1
-
-    We additionally require finite m/z values and finite positive
-    intensities.
-
-    A spectrum is considered processable if at least one peak survives.
-    """
+) -> tuple[bool, int]:
+    if (
+        mzs is None
+        or intensities is None
+    ):
+        return False, 0
 
     mzs = np.asarray(
         mzs,
-        dtype=float,
+        dtype=np.float64,
     )
 
     intensities = np.asarray(
         intensities,
-        dtype=float,
+        dtype=np.float64,
     )
 
     if (
-        mzs.ndim != 1
-        or intensities.ndim != 1
-        or len(mzs) != len(intensities)
-        or len(mzs) == 0
+        mzs.size == 0
+        or intensities.size == 0
     ):
-        return 0
+        return False, 0
+
+    if (
+        mzs.size
+        != intensities.size
+    ):
+        return False, 0
 
     mask = (
-        np.isfinite(mzs)
-        & np.isfinite(intensities)
-        & (intensities > 0)
-        & (mzs <= precursor_mz + 1.0)
+        np.isfinite(
+            mzs
+        )
+        & np.isfinite(
+            intensities
+        )
+        & (
+            intensities
+            > 0
+        )
     )
 
-    return int(
+    if np.isfinite(
+        precursor_mz
+    ):
+        mask &= (
+            mzs
+            <= (
+                float(
+                    precursor_mz
+                )
+                + 1.0
+            )
+        )
+
+    usable_count = int(
         mask.sum()
     )
 
+    return (
+        usable_count > 0,
+        usable_count,
+    )
 
-def select_test_spectra(
-    test: pd.DataFrame,
+
+def validate_formula_index(
+    formula_index: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Preserve the frozen H+ path whenever a molecule has [M+H]+ spectra.
+    required = {
+        "molecular_formula",
+        "monoisotopic_mass",
+    }
 
-    For molecules with no [M+H]+ spectra, fall back to all spectra whose
-    adduct is explicitly supported by ADDUCT_MASS_SHIFT.
-    """
+    missing = (
+        required
+        - set(
+            formula_index.columns
+        )
+    )
 
-    molecules_with_hplus = set(
-        test.loc[
-            test["adduct"] == "[M+H]+",
-            "molecule_id",
+    if missing:
+        raise ValueError(
+            "Formula index is missing required columns: "
+            f"{sorted(missing)}"
+        )
+
+    out = formula_index[
+        [
+            "molecular_formula",
+            "monoisotopic_mass",
+        ]
+    ].copy()
+
+    out = out.dropna(
+        subset=[
+            "molecular_formula",
+            "monoisotopic_mass",
         ]
     )
 
-    def should_use(row) -> bool:
-        if row.molecule_id in molecules_with_hplus:
-            return row.adduct == "[M+H]+"
+    out[
+        "molecular_formula"
+    ] = (
+        out[
+            "molecular_formula"
+        ]
+        .astype(str)
+    )
 
-        return row.adduct in ADDUCT_MASS_SHIFT
+    out[
+        "monoisotopic_mass"
+    ] = pd.to_numeric(
+        out[
+            "monoisotopic_mass"
+        ],
+        errors="coerce",
+    )
 
-    mask = [
-        should_use(row)
-        for row in test.itertuples(
-            index=False
+    out = out[
+        np.isfinite(
+            out[
+                "monoisotopic_mass"
+            ]
         )
-    ]
-
-    return test.loc[
-        mask
     ].copy()
 
+    out = out.drop_duplicates(
+        subset=[
+            "molecular_formula",
+        ]
+    )
 
-def main():
+    out = out.sort_values(
+        "monoisotopic_mass"
+    ).reset_index(
+        drop=True
+    )
+
+    return out
+
+
+def select_query_spectra(
+    test: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Frozen selection rule:
+
+    - if a molecule has [M+H]+ spectra, use only those;
+    - otherwise use spectra whose adduct has a supported
+      neutral-mass transform.
+    """
+
+    selected_parts = []
+
+    for (
+        molecule_id,
+        group,
+    ) in test.groupby(
+        "molecule_id",
+        sort=False,
+    ):
+        protonated = group[
+            group[
+                "adduct"
+            ]
+            == PRIMARY_ADDUCT
+        ]
+
+        if not protonated.empty:
+            selected = (
+                protonated.copy()
+            )
+
+            selected[
+                "selection_reason"
+            ] = "primary_hplus"
+
+        else:
+            selected = group[
+                group[
+                    "adduct"
+                ].isin(
+                    ADDUCT_SHIFTS
+                )
+            ].copy()
+
+            selected[
+                "selection_reason"
+            ] = (
+                "fallback_supported_adduct"
+            )
+
+        if not selected.empty:
+            selected_parts.append(
+                selected
+            )
+
+    if not selected_parts:
+        return (
+            test
+            .iloc[0:0]
+            .copy()
+        )
+
+    return pd.concat(
+        selected_parts,
+        ignore_index=True,
+    )
+
+
+def build_mass_lookup(
+    formula_index: pd.DataFrame,
+):
+    formulas = (
+        formula_index[
+            "molecular_formula"
+        ]
+        .to_numpy()
+    )
+
+    masses = (
+        formula_index[
+            "monoisotopic_mass"
+        ]
+        .to_numpy(
+            dtype=np.float64
+        )
+    )
+
+    return (
+        formulas,
+        masses,
+    )
+
+
+def find_formula_matches(
+    observed_neutral_mass: float,
+    formulas: np.ndarray,
+    masses: np.ndarray,
+) -> list[
+    tuple[
+        str,
+        float,
+        float,
+    ]
+]:
+    if not np.isfinite(
+        observed_neutral_mass
+    ):
+        return []
+
+    mass_delta = (
+        observed_neutral_mass
+        * FORMULA_TOLERANCE_PPM
+        / 1_000_000.0
+    )
+
+    low = (
+        observed_neutral_mass
+        - mass_delta
+    )
+
+    high = (
+        observed_neutral_mass
+        + mass_delta
+    )
+
+    left = np.searchsorted(
+        masses,
+        low,
+        side="left",
+    )
+
+    right = np.searchsorted(
+        masses,
+        high,
+        side="right",
+    )
+
+    matches = []
+
+    for i in range(
+        left,
+        right,
+    ):
+        theoretical = float(
+            masses[i]
+        )
+
+        err = ppm_error(
+            observed_neutral_mass,
+            theoretical,
+        )
+
+        matches.append(
+            (
+                str(
+                    formulas[i]
+                ),
+                theoretical,
+                err,
+            )
+        )
+
+    return matches
+
+
+def empty_hypothesis_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "molecule_id",
+            "source_test_row_id",
+            "source_spectrum_id",
+            "selected_spectrum_id",
+            "selected_adduct",
+            "selected_ionization_mode",
+            "selection_reason",
+            "precursor_mz",
+            "selected_precursor_mz",
+            "neutral_mass",
+            "molecular_formula",
+            "candidate_formula",
+            "formula_monoisotopic_mass",
+            "selected_mass_error_ppm",
+            "selected_abs_mass_error_ppm",
+            "mist_processable",
+            "mist_usable_peak_count",
+            "spectrum_support_count",
+            "selected_spectrum_count",
+            "spectrum_support_fraction",
+            "min_abs_mass_error_ppm",
+            "hypothesis_spec",
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> None:
     OUTPUT_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    #
-    # Load test data.
-    #
-    test = pd.read_parquet(
-        TEST_PATH
-    ).reset_index(
-        drop=True
+    print(
+        "Project root:",
+        PROJECT_ROOT,
     )
 
-    #
-    # Assign stable IDs BEFORE filtering.
-    #
+    print(
+        "Test:",
+        TEST_PATH,
+    )
+
+    print(
+        "Formula index:",
+        FORMULA_INDEX_PATH,
+    )
+
+    print(
+        "Output:",
+        OUTPUT_PATH,
+    )
+
+    if DEBUG_STAGE:
+        print(
+            "Debug stage:",
+            DEBUG_STAGE,
+        )
+
+    print()
+
+    # ------------------------------------------------------------------
+    # Stage 1: load test
+    # ------------------------------------------------------------------
+
+    test = pd.read_parquet(
+        TEST_PATH
+    )
+
+    required_test_columns = {
+        "molecule_id",
+        "spectrum_id",
+        "ms2_mzs",
+        "ms2_normalized_intensities",
+        "adduct",
+        "ionization_mode",
+        "precursor_mz",
+    }
+
+    missing_test_columns = (
+        required_test_columns
+        - set(
+            test.columns
+        )
+    )
+
+    if missing_test_columns:
+        raise ValueError(
+            "Test parquet is missing columns: "
+            f"{sorted(missing_test_columns)}"
+        )
+
+    test = (
+        test
+        .reset_index(
+            drop=True
+        )
+        .copy()
+    )
+
     test[
         "source_test_row_id"
     ] = np.arange(
         len(test),
         dtype=np.int64,
+    )
+
+    test[
+        "molecule_id"
+    ] = (
+        test[
+            "molecule_id"
+        ]
+        .astype(str)
+    )
+
+    test[
+        "spectrum_id"
+    ] = (
+        test[
+            "spectrum_id"
+        ]
+        .astype(str)
     )
 
     print(
@@ -186,7 +591,7 @@ def main():
 
     print()
     print(
-        "Adduct counts:"
+        "Test adducts:"
     )
 
     print(
@@ -199,17 +604,55 @@ def main():
         .to_string()
     )
 
-    #
-    # Select spectra.
-    #
-    # Molecules with H+:
-    #     use H+ only
-    #
-    # Molecules without H+:
-    #     use supported fallback adducts
-    #
-    selected = select_test_spectra(
-        test
+    if stop_after(
+        "load_test"
+    ):
+        return
+
+    # ------------------------------------------------------------------
+    # Stage 2: formula index
+    # ------------------------------------------------------------------
+
+    formula_index = (
+        pd.read_parquet(
+            FORMULA_INDEX_PATH
+        )
+    )
+
+    formula_index = (
+        validate_formula_index(
+            formula_index
+        )
+    )
+
+    print()
+    print(
+        "Formula index entries:",
+        len(
+            formula_index
+        ),
+    )
+
+    (
+        formulas,
+        masses,
+    ) = build_mass_lookup(
+        formula_index
+    )
+
+    if stop_after(
+        "formula_index"
+    ):
+        return
+
+    # ------------------------------------------------------------------
+    # Stage 3: select spectra
+    # ------------------------------------------------------------------
+
+    selected = (
+        select_query_spectra(
+            test
+        )
     )
 
     print()
@@ -219,7 +662,7 @@ def main():
     )
 
     print(
-        "Molecules represented by selected spectra:",
+        "Selected molecules:",
         selected[
             "molecule_id"
         ].nunique(),
@@ -227,47 +670,178 @@ def main():
 
     print()
     print(
-        "Selected adduct counts:"
+        "Selected adducts:"
     )
 
-    print(
-        selected[
-            "adduct"
-        ]
-        .value_counts(
-            dropna=False
+    if not selected.empty:
+        print(
+            selected[
+                "adduct"
+            ]
+            .value_counts(
+                dropna=False
+            )
+            .to_string()
         )
-        .to_string()
+    else:
+        print(
+            "(none)"
+        )
+
+    all_molecule_ids = set(
+        test[
+            "molecule_id"
+        ]
     )
 
-    #
-    # Determine MIST processability.
-    #
-    selected[
-        "mist_usable_peak_count"
-    ] = [
-        mist_usable_peaks(
-            row.ms2_mzs,
-            row.ms2_normalized_intensities,
-            float(
-                row.precursor_mz
+    selected_molecule_ids = set(
+        selected[
+            "molecule_id"
+        ]
+    )
+
+    unsupported_molecules = sorted(
+        all_molecule_ids
+        - selected_molecule_ids
+    )
+
+    if unsupported_molecules:
+        print()
+        print(
+            "WARNING: molecules with no supported adduct:",
+            len(
+                unsupported_molecules
             ),
         )
-        for row in selected.itertuples(
-            index=False
+
+        print(
+            test.loc[
+                test[
+                    "molecule_id"
+                ].isin(
+                    unsupported_molecules
+                ),
+                [
+                    "molecule_id",
+                    "ionization_mode",
+                    "adduct",
+                ],
+            ]
+            .drop_duplicates()
+            .sort_values(
+                [
+                    "molecule_id",
+                    "adduct",
+                ]
+            )
+            .to_string(
+                index=False
+            )
+        )
+
+    if stop_after(
+        "select_spectra"
+    ):
+        return
+
+    if selected.empty:
+        empty = (
+            empty_hypothesis_frame()
+        )
+
+        empty.to_parquet(
+            OUTPUT_PATH,
+            index=False,
+        )
+
+        print()
+        print(
+            "No supported spectra were available."
+        )
+
+        print(
+            f"Wrote empty hypothesis file: {OUTPUT_PATH}"
+        )
+
+        return
+
+    # ------------------------------------------------------------------
+    # Stage 4: neutral mass + processability
+    # ------------------------------------------------------------------
+
+    selected[
+        "neutral_mass"
+    ] = [
+        neutral_mass_from_adduct(
+            precursor_mz,
+            adduct,
+        )
+        for (
+            precursor_mz,
+            adduct,
+        )
+        in zip(
+            selected[
+                "precursor_mz"
+            ],
+            selected[
+                "adduct"
+            ],
+        )
+    ]
+
+    processability = [
+        is_mist_processable(
+            mzs,
+            intensities,
+            precursor_mz,
+        )
+        for (
+            mzs,
+            intensities,
+            precursor_mz,
+        )
+        in zip(
+            selected[
+                "ms2_mzs"
+            ],
+            selected[
+                "ms2_normalized_intensities"
+            ],
+            selected[
+                "precursor_mz"
+            ],
         )
     ]
 
     selected[
         "mist_processable"
-    ] = (
-        selected[
-            "mist_usable_peak_count"
-        ]
-        > 0
-    )
+    ] = [
+        value[0]
+        for value
+        in processability
+    ]
+
+    selected[
+        "mist_usable_peak_count"
+    ] = [
+        value[1]
+        for value
+        in processability
+    ]
 
     print()
+    print(
+        "Selected spectra with finite neutral mass:",
+        int(
+            np.isfinite(
+                selected[
+                    "neutral_mass"
+                ]
+            ).sum()
+        ),
+    )
+
     print(
         "MIST-processable selected spectra:",
         int(
@@ -277,249 +851,167 @@ def main():
         ),
     )
 
-    print(
-        "Molecules with at least one processable selected spectrum:",
-        selected.loc[
-            selected[
-                "mist_processable"
-            ],
-            "molecule_id",
-        ].nunique(),
-    )
+    if stop_after(
+        "processability"
+    ):
+        return
 
-    #
-    # Calculate neutral mass using the selected spectrum's adduct.
-    #
-    selected[
-        "observed_neutral_mass"
-    ] = [
-        float(
-            row.precursor_mz
-        )
-        - ADDUCT_MASS_SHIFT[
-            row.adduct
-        ]
-        for row in selected.itertuples(
-            index=False
-        )
-    ]
+    # ------------------------------------------------------------------
+    # Stage 5: formula matching
+    # ------------------------------------------------------------------
 
-    #
-    # Load frozen training + approved COCONUT formula universe.
-    #
-    formula_index = pd.read_parquet(
-        FORMULA_INDEX_PATH
-    )[
-        [
-            "molecular_formula",
-            "monoisotopic_mass",
-        ]
-    ].copy()
+    rows = []
 
-    formula_index = (
-        formula_index
-        .dropna()
-        .drop_duplicates(
-            subset=[
-                "molecular_formula"
-            ]
-        )
-        .sort_values(
-            "monoisotopic_mass"
-        )
-        .reset_index(
-            drop=True
-        )
-    )
+    raw_match_count = 0
 
-    formula_masses = (
-        formula_index[
-            "monoisotopic_mass"
-        ]
-        .astype(float)
-        .to_numpy()
-    )
-
-    formula_names = (
-        formula_index[
-            "molecular_formula"
-        ]
-        .astype(str)
-        .to_numpy()
-    )
-
-    print()
-    print(
-        "Formula index entries:",
-        len(formula_index),
-    )
-
-    #
-    # Find every formula within the frozen ±10 ppm window for
-    # every selected spectrum.
-    #
-    hypothesis_rows = []
-
-    for spectrum in selected.itertuples(
+    for row in selected.itertuples(
         index=False
     ):
-        observed_mass = float(
-            spectrum.observed_neutral_mass
-        )
-
-        mass_delta = (
-            observed_mass
-            * PPM_TOLERANCE
-            / 1_000_000.0
-        )
-
-        lower = (
-            observed_mass
-            - mass_delta
-        )
-
-        upper = (
-            observed_mass
-            + mass_delta
-        )
-
-        left = int(
-            np.searchsorted(
-                formula_masses,
-                lower,
-                side="left",
+        matches = (
+            find_formula_matches(
+                float(
+                    row.neutral_mass
+                ),
+                formulas,
+                masses,
             )
         )
 
-        right = int(
-            np.searchsorted(
-                formula_masses,
-                upper,
-                side="right",
-            )
+        raw_match_count += len(
+            matches
         )
 
-        for idx in range(
-            left,
-            right,
-        ):
-            expected_mass = float(
-                formula_masses[
-                    idx
-                ]
-            )
-
-            error_ppm = ppm_error(
-                observed_mass,
-                expected_mass,
-            )
-
-            hypothesis_rows.append(
+        for (
+            molecular_formula,
+            theoretical_mass,
+            signed_ppm,
+        ) in matches:
+            rows.append(
                 {
                     "molecule_id":
-                        spectrum.molecule_id,
-
-                    "candidate_formula":
-                        formula_names[
-                            idx
-                        ],
-
-                    "formula_mass":
-                        expected_mass,
+                        row.molecule_id,
 
                     "source_test_row_id":
                         int(
-                            spectrum.source_test_row_id
+                            row.source_test_row_id
                         ),
 
                     "source_spectrum_id":
-                        spectrum.spectrum_id,
+                        row.spectrum_id,
 
-                    "source_adduct":
-                        spectrum.adduct,
+                    "selected_adduct":
+                        row.adduct,
 
-                    "source_ionization_mode":
-                        spectrum.ionization_mode,
+                    "selected_ionization_mode":
+                        row.ionization_mode,
 
-                    "source_precursor_mz":
+                    "selection_reason":
+                        row.selection_reason,
+
+                    "precursor_mz":
                         float(
-                            spectrum.precursor_mz
+                            row.precursor_mz
                         ),
 
-                    "source_raw_peak_count":
-                        len(
-                            spectrum.ms2_mzs
+                    "neutral_mass":
+                        float(
+                            row.neutral_mass
                         ),
 
-                    "source_mist_usable_peak_count":
-                        int(
-                            spectrum.mist_usable_peak_count
+                    "molecular_formula":
+                        molecular_formula,
+
+                    "formula_monoisotopic_mass":
+                        theoretical_mass,
+
+                    "selected_mass_error_ppm":
+                        signed_ppm,
+
+                    "selected_abs_mass_error_ppm":
+                        abs(
+                            signed_ppm
                         ),
 
-                    "source_mist_processable":
+                    "mist_processable":
                         bool(
-                            spectrum.mist_processable
+                            row.mist_processable
                         ),
 
-                    "mass_error_ppm":
-                        float(
-                            error_ppm
+                    "mist_usable_peak_count":
+                        int(
+                            row.mist_usable_peak_count
                         ),
                 }
             )
 
-    per_spectrum = pd.DataFrame(
-        hypothesis_rows
+    matches_df = pd.DataFrame(
+        rows
     )
 
     print()
     print(
-        "Raw spectrum/formula matches:",
-        len(
-            per_spectrum
-        ),
+        "Raw formula matches:",
+        raw_match_count,
     )
 
-    if per_spectrum.empty:
-        raise RuntimeError(
-            "No formula hypotheses were generated."
+    if stop_after(
+        "formula_matching"
+    ):
+        return
+
+    if matches_df.empty:
+        empty = (
+            empty_hypothesis_frame()
         )
 
-    #
-    # Multi-spectrum union.
-    #
-    # Support is computed across every selected spectrum for the
-    # molecule, regardless of adduct.
-    #
+        empty.to_parquet(
+            OUTPUT_PATH,
+            index=False,
+        )
+
+        print()
+        print(
+            "WARNING: no formula hypotheses were generated."
+        )
+
+        print(
+            f"Wrote empty hypothesis file: {OUTPUT_PATH}"
+        )
+
+        return
+
+    # ------------------------------------------------------------------
+    # Stage 6: support aggregation
+    # ------------------------------------------------------------------
+
     support = (
-        per_spectrum.groupby(
+        matches_df
+        .groupby(
             [
                 "molecule_id",
-                "candidate_formula",
-            ]
+                "molecular_formula",
+            ],
+            as_index=False,
         )
         .agg(
-            formula_support_count=(
-                "source_test_row_id",
+            spectrum_support_count=(
+                "source_spectrum_id",
                 "nunique",
             ),
-            best_abs_mass_error_ppm=(
-                "mass_error_ppm",
-                lambda values: float(
-                    np.abs(
-                        values
-                    ).min()
-                ),
+
+            min_abs_mass_error_ppm=(
+                "selected_abs_mass_error_ppm",
+                "min",
             ),
         )
-        .reset_index()
     )
 
-    total_spectra = (
-        selected.groupby(
+    selected_spectrum_counts = (
+        selected
+        .groupby(
             "molecule_id"
         )[
-            "source_test_row_id"
+            "spectrum_id"
         ]
         .nunique()
         .rename(
@@ -529,353 +1021,353 @@ def main():
     )
 
     support = support.merge(
-        total_spectra,
+        selected_spectrum_counts,
         on="molecule_id",
         how="left",
         validate="many_to_one",
     )
 
     support[
-        "formula_support_fraction"
+        "spectrum_support_fraction"
     ] = (
         support[
-            "formula_support_count"
+            "spectrum_support_count"
         ]
         / support[
             "selected_spectrum_count"
         ]
     )
 
-    #
-    # Frozen representative-spectrum rule:
-    #
-    # For every molecule/formula hypothesis:
-    #
-    #   1. consider only MIST-processable spectra
-    #   2. choose smallest |ppm error|
-    #   3. use source_test_row_id as deterministic tie-breaker
-    #
-    processable = per_spectrum[
-        per_spectrum[
-            "source_mist_processable"
-        ]
-    ].copy()
-
-    processable[
-        "abs_mass_error_ppm"
-    ] = (
-        processable[
-            "mass_error_ppm"
-        ].abs()
+    print()
+    print(
+        "Supported molecule/formula pairs:",
+        len(
+            support
+        ),
     )
 
-    processable = processable.sort_values(
-        [
+    if stop_after(
+        "support"
+    ):
+        return
+
+    # ------------------------------------------------------------------
+    # Stage 7: choose representative spectra and build hypotheses
+    # ------------------------------------------------------------------
+
+    ranked = matches_df.sort_values(
+        by=[
             "molecule_id",
-            "candidate_formula",
-            "abs_mass_error_ppm",
+            "molecular_formula",
+            "mist_processable",
+            "selected_abs_mass_error_ppm",
+            "mist_usable_peak_count",
             "source_test_row_id",
         ],
         ascending=[
             True,
             True,
+            False,
             True,
+            False,
             True,
         ],
     )
 
-    representative = (
-        processable
+    representatives = (
+        ranked
         .drop_duplicates(
             subset=[
                 "molecule_id",
-                "candidate_formula",
+                "molecular_formula",
             ],
             keep="first",
         )
         .copy()
     )
 
-    representative = representative.merge(
-        support,
-        on=[
-            "molecule_id",
-            "candidate_formula",
-        ],
-        how="left",
-        validate="one_to_one",
+    hypotheses = (
+        representatives
+        .merge(
+            support,
+            on=[
+                "molecule_id",
+                "molecular_formula",
+            ],
+            how="left",
+            validate="one_to_one",
+        )
     )
 
-    #
-    # Sort first so hypothesis IDs are deterministic.
-    #
-    representative = (
-        representative
+    hypotheses = (
+        hypotheses
         .sort_values(
-            [
+            by=[
                 "molecule_id",
-                "candidate_formula",
-            ]
+                "min_abs_mass_error_ppm",
+                "molecular_formula",
+            ],
+            ascending=[
+                True,
+                True,
+                True,
+            ],
         )
         .reset_index(
             drop=True
         )
     )
 
-    #
-    # Stable hypothesis names.
-    #
-    hypothesis_names = {}
-
-    for molecule_id, group in (
-        representative.groupby(
-            "molecule_id",
-            sort=False,
+    hypothesis_number = (
+        hypotheses
+        .groupby(
+            "molecule_id"
         )
+        .cumcount()
+    )
+
+    hypotheses[
+        "hypothesis_spec"
+    ] = [
+        (
+            f"{molecule_id}"
+            f"__formula_{number:04d}"
+        )
+        for (
+            molecule_id,
+            number,
+        )
+        in zip(
+            hypotheses[
+                "molecule_id"
+            ],
+            hypothesis_number,
+        )
+    ]
+
+    #
+    # Compatibility aliases required by export_test_mist_inputs.py.
+    #
+    hypotheses[
+        "selected_spectrum_id"
+    ] = (
+        hypotheses[
+            "source_spectrum_id"
+        ]
+    )
+
+    hypotheses[
+        "selected_precursor_mz"
+    ] = (
+        hypotheses[
+            "precursor_mz"
+        ]
+    )
+
+    hypotheses[
+        "candidate_formula"
+    ] = (
+        hypotheses[
+            "molecular_formula"
+        ]
+    )
+
+    if stop_after(
+        "hypotheses"
     ):
-        for local_index, row_index in enumerate(
-            group.index
-        ):
-            hypothesis_names[
-                row_index
-            ] = (
-                f"test_{molecule_id}_"
-                f"formula_{local_index:03d}"
-            )
+        return
 
-    representative[
-        "hypothesis_spec"
-    ] = representative.index.map(
-        hypothesis_names
-    )
+    # ------------------------------------------------------------------
+    # Stage 8: diagnostics + write
+    # ------------------------------------------------------------------
 
-    #
-    # Normalize selected-spectrum column names so downstream code
-    # has a clear distinction between the hypothesis and its chosen
-    # raw spectrum.
-    #
-    representative = representative.rename(
-        columns={
-            "mass_error_ppm":
-                "selected_mass_error_ppm",
-
-            "source_mist_usable_peak_count":
-                "selected_mist_usable_peak_count",
-
-            "source_raw_peak_count":
-                "selected_raw_peak_count",
-
-            "source_precursor_mz":
-                "selected_precursor_mz",
-
-            "source_spectrum_id":
-                "selected_spectrum_id",
-
-            "source_adduct":
-                "selected_adduct",
-
-            "source_ionization_mode":
-                "selected_ionization_mode",
-        }
-    )
-
-    output_columns = [
-        "molecule_id",
-        "hypothesis_spec",
-        "candidate_formula",
-        "formula_mass",
-        "formula_support_count",
-        "formula_support_fraction",
-        "selected_spectrum_count",
-        "best_abs_mass_error_ppm",
-        "selected_mass_error_ppm",
-        "source_test_row_id",
-        "selected_spectrum_id",
-        "selected_adduct",
-        "selected_ionization_mode",
-        "selected_precursor_mz",
-        "selected_raw_peak_count",
-        "selected_mist_usable_peak_count",
-    ]
-
-    representative = representative[
-        output_columns
-    ]
-
-    #
-    # Sanity checks.
-    #
-    if representative[
-        "hypothesis_spec"
-    ].duplicated().any():
-        raise RuntimeError(
-            "Duplicate hypothesis_spec values generated."
-        )
-
-    if (
-        representative[
-            "selected_mist_usable_peak_count"
+    hypothesis_molecule_ids = set(
+        hypotheses[
+            "molecule_id"
         ]
-        <= 0
-    ).any():
-        raise RuntimeError(
-            "A selected representative spectrum is not MIST-processable."
-        )
-
-    if (
-        representative[
-            "selected_mass_error_ppm"
-        ]
-        .abs()
-        > PPM_TOLERANCE + 1e-9
-    ).any():
-        raise RuntimeError(
-            "Generated hypothesis outside frozen ppm tolerance."
-        )
-
-    representative.to_parquet(
-        OUTPUT_PATH,
-        index=False,
     )
 
-    #
-    # Summary.
-    #
+    missing_hypothesis_ids = sorted(
+        all_molecule_ids
+        - hypothesis_molecule_ids
+    )
+
     print()
     print(
-        "Test multi-spectrum formula hypotheses"
+        "Formula hypothesis summary"
     )
+
     print(
-        "--------------------------------------"
+        "--------------------------"
     )
 
     print(
         "Hypotheses:",
         len(
-            representative
+            hypotheses
         ),
     )
 
     print(
-        "Molecules with hypotheses:",
-        representative[
+        "Molecules:",
+        hypotheses[
             "molecule_id"
         ].nunique(),
     )
 
     print(
-        "Total test molecules:",
-        test[
-            "molecule_id"
+        "Unique formulas:",
+        hypotheses[
+            "molecular_formula"
         ].nunique(),
     )
 
     formula_counts = (
-        representative.groupby(
+        hypotheses
+        .groupby(
             "molecule_id"
         )
         .size()
     )
 
-    print(
-        "Formulas/molecule mean:",
-        float(
-            formula_counts.mean()
-        ),
-    )
+    if not formula_counts.empty:
+        print(
+            "Formulas/molecule mean:",
+            float(
+                formula_counts.mean()
+            ),
+        )
+
+        print(
+            "Formulas/molecule median:",
+            float(
+                formula_counts.median()
+            ),
+        )
+
+        print(
+            "Formulas/molecule max:",
+            int(
+                formula_counts.max()
+            ),
+        )
 
     print(
-        "Formulas/molecule median:",
-        float(
-            formula_counts.median()
-        ),
-    )
-
-    print(
-        "Formulas/molecule max:",
+        "MIST-processable hypotheses:",
         int(
-            formula_counts.max()
+            hypotheses[
+                "mist_processable"
+            ].sum()
         ),
     )
 
     print(
-        "Unique selected spectra:",
-        representative[
-            "source_test_row_id"
+        "Selected unique spectra:",
+        hypotheses[
+            "source_spectrum_id"
         ].nunique(),
     )
 
-    print(
-        "Minimum selected MIST-usable peaks:",
-        int(
-            representative[
-                "selected_mist_usable_peak_count"
-            ].min()
-        ),
-    )
-
-    print(
-        "Maximum selected |ppm error|:",
-        float(
-            representative[
-                "selected_mass_error_ppm"
-            ]
-            .abs()
-            .max()
-        ),
-    )
-
-    print()
-    print(
-        "Selected representative adducts:"
-    )
-
-    print(
-        representative[
-            "selected_adduct"
-        ]
-        .value_counts(
-            dropna=False
-        )
-        .to_string()
-    )
-
-    missing_molecules = sorted(
-        set(
-            test[
-                "molecule_id"
-            ]
-        )
-        - set(
-            representative[
-                "molecule_id"
-            ]
-        )
-    )
-
-    print()
-    print(
-        "Molecules without usable hypotheses:",
-        len(
-            missing_molecules
-        ),
-    )
-
-    if missing_molecules:
+    if not hypotheses.empty:
         print(
-            "Missing molecule IDs:"
+            "Min MIST usable peaks:",
+            int(
+                hypotheses[
+                    "mist_usable_peak_count"
+                ].min()
+            ),
         )
 
-        for molecule_id in missing_molecules:
-            print(
-                " ",
-                molecule_id,
+        print(
+            "Max abs ppm:",
+            float(
+                hypotheses[
+                    "selected_abs_mass_error_ppm"
+                ].max()
+            ),
+        )
+
+    print()
+    print(
+        "Test molecules:",
+        len(
+            all_molecule_ids
+        ),
+    )
+
+    print(
+        "Molecules with formula hypotheses:",
+        len(
+            hypothesis_molecule_ids
+        ),
+    )
+
+    print(
+        "Missing after formula generation:",
+        len(
+            missing_hypothesis_ids
+        ),
+    )
+
+    if missing_hypothesis_ids:
+        print()
+        print(
+            "WARNING: test molecules with no formula hypotheses:",
+            len(
+                missing_hypothesis_ids
+            ),
+        )
+
+        print()
+        print(
+            "Missing molecule adducts:"
+        )
+
+        print(
+            test.loc[
+                test[
+                    "molecule_id"
+                ].isin(
+                    missing_hypothesis_ids
+                ),
+                [
+                    "molecule_id",
+                    "ionization_mode",
+                    "adduct",
+                ],
+            ]
+            .drop_duplicates()
+            .sort_values(
+                [
+                    "molecule_id",
+                    "adduct",
+                ]
             )
+            .to_string(
+                index=False
+            )
+        )
+
+        print()
+        print(
+            "These molecules will be handled later by "
+            "same-polarity spectral retrieval."
+        )
+
+    hypotheses.to_parquet(
+        OUTPUT_PATH,
+        index=False,
+    )
 
     print()
     print(
         f"Wrote {OUTPUT_PATH}"
     )
+
+    if stop_after(
+        "write"
+    ):
+        return
 
 
 if __name__ == "__main__":

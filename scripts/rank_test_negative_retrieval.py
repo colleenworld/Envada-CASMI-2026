@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import os
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +12,10 @@ from casmi26.spectra.binning import bin_spectrum
 
 
 PROJECT_ROOT = Path(
-    "/home/colleen/PycharmProjects/Envada-CASMI-2026"
+    os.environ.get(
+        "CASMI26_PROJECT_ROOT",
+        Path(__file__).resolve().parent.parent,
+    )
 )
 
 TEST_PATH = (
@@ -33,6 +39,11 @@ STRUCTURES_PATH = (
     / "data/processed/structure_index/structures.parquet"
 )
 
+#
+# Keep the existing output filename so build_submission.py does not
+# need to change. The contents are now a generic same-polarity
+# retrieval fallback, not a negative-only fallback.
+#
 OUTPUT_PATH = (
     PROJECT_ROOT
     / "data/processed/test/"
@@ -43,9 +54,19 @@ BIN_WIDTH = 1.0
 MAX_MZ = 1500.0
 
 #
-# Frozen retrieval setting.
+# Frozen retrieval setting from the validated retrieval baseline.
 #
 NEUTRAL_MASS_TOLERANCE_DA = 0.01
+
+
+OUTPUT_COLUMNS = [
+    "molecule_id",
+    "candidate_inchikey14",
+    "candidate_smiles",
+    "retrieval_cosine",
+    "rank",
+    "ranking_method",
+]
 
 
 def infer_neutral_mass(
@@ -121,6 +142,145 @@ def merge_scores(
             ] = float(score)
 
 
+def write_empty_output():
+    """
+    A zero-sized fallback branch is valid: all test molecules may
+    already have been ranked by the positive contrastive branch.
+    Write the expected schema and return successfully.
+    """
+
+    OUTPUT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    pd.DataFrame(
+        columns=OUTPUT_COLUMNS
+    ).to_parquet(
+        OUTPUT_PATH,
+        index=False,
+    )
+
+    print()
+    print(
+        "No fallback molecules require spectral retrieval."
+    )
+    print(
+        f"Wrote empty fallback ranking to {OUTPUT_PATH}"
+    )
+
+
+def build_reference_cache(
+    metadata,
+    vectors,
+    ionization_mode,
+):
+    """
+    Build the same-polarity retrieval view for one ionization mode.
+
+    Neutral masses are computed once for this mode and reused for
+    every fallback query spectrum of the same polarity.
+    """
+
+    mode_mask = (
+        metadata[
+            "ionization_mode"
+        ]
+        .astype(str)
+        .to_numpy()
+        == ionization_mode
+    )
+
+    mode_indices = np.flatnonzero(
+        mode_mask
+    )
+
+    if len(mode_indices) == 0:
+        raise RuntimeError(
+            "Retrieval index contains no reference spectra for "
+            f"ionization mode {ionization_mode!r}."
+        )
+
+    ref_meta = (
+        metadata.iloc[
+            mode_indices
+        ]
+        .reset_index(
+            drop=True
+        )
+    )
+
+    ref_vectors = vectors[
+        mode_indices
+    ]
+
+    print()
+    print(
+        f"{ionization_mode.capitalize()} reference spectra:",
+        len(ref_meta),
+    )
+
+    print(
+        f"Computing {ionization_mode} reference neutral masses..."
+    )
+
+    ref_neutral_masses = np.empty(
+        len(ref_meta),
+        dtype=np.float64,
+    )
+
+    for i, row in enumerate(
+        ref_meta.itertuples(
+            index=False
+        )
+    ):
+        ref_neutral_masses[i] = (
+            infer_neutral_mass(
+                row.precursor_mz,
+                row.adduct,
+            )
+        )
+
+    finite_reference_mass = (
+        np.isfinite(
+            ref_neutral_masses
+        )
+    )
+
+    print(
+        f"{ionization_mode.capitalize()} references "
+        "with supported adduct:",
+        int(
+            finite_reference_mass.sum()
+        ),
+    )
+
+    print(
+        f"{ionization_mode.capitalize()} references "
+        "with unsupported adduct:",
+        int(
+            (
+                ~finite_reference_mass
+            ).sum()
+        ),
+    )
+
+    ref_keys = (
+        ref_meta[
+            "inchikey14"
+        ]
+        .astype(str)
+        .to_numpy()
+    )
+
+    return {
+        "vectors": ref_vectors,
+        "keys": ref_keys,
+        "neutral_masses": ref_neutral_masses,
+        "finite_mass": finite_reference_mass,
+    }
+
+
 def main():
     #
     # Determine which test molecules were NOT handled by the
@@ -132,26 +292,44 @@ def main():
         drop=True
     )
 
-    positive = pd.read_parquet(
-        POSITIVE_RANKING_PATH,
-        columns=[
-            "molecule_id",
-        ],
-    )
-
-    positive_molecules = set(
-        positive[
-            "molecule_id"
-        ].astype(str)
-    )
+    test[
+        "molecule_id"
+    ] = test[
+        "molecule_id"
+    ].astype(str)
 
     all_molecules = set(
         test[
             "molecule_id"
-        ].astype(str)
+        ]
     )
 
-    negative_molecules = (
+    if POSITIVE_RANKING_PATH.exists():
+        positive = pd.read_parquet(
+            POSITIVE_RANKING_PATH,
+            columns=[
+                "molecule_id",
+            ],
+        )
+
+        positive_molecules = set(
+            positive[
+                "molecule_id"
+            ].astype(str)
+        )
+    else:
+        #
+        # This also makes the fallback script robust if a hidden
+        # test set produces no positive ranking file.
+        #
+        positive_molecules = set()
+
+        print(
+            "Positive ranking file does not exist; "
+            "all test molecules will use retrieval fallback."
+        )
+
+    fallback_molecules = (
         all_molecules
         - positive_molecules
     )
@@ -168,16 +346,15 @@ def main():
 
     print(
         "Fallback molecules:",
-        len(negative_molecules),
+        len(fallback_molecules),
     )
 
     queries = test[
         test[
             "molecule_id"
         ]
-        .astype(str)
         .isin(
-            negative_molecules
+            fallback_molecules
         )
     ].copy()
 
@@ -186,49 +363,81 @@ def main():
         len(queries),
     )
 
-    print()
-    print(
-        "Fallback ionization modes:"
-    )
-
-    print(
-        queries[
-            "ionization_mode"
-        ]
-        .value_counts(
-            dropna=False
+    if not queries.empty:
+        print()
+        print(
+            "Fallback ionization modes:"
         )
-        .to_string()
-    )
 
-    print()
-    print(
-        "Fallback adducts:"
-    )
-
-    print(
-        queries[
-            "adduct"
-        ]
-        .value_counts(
-            dropna=False
+        print(
+            queries[
+                "ionization_mode"
+            ]
+            .value_counts(
+                dropna=False
+            )
+            .to_string()
         )
-        .to_string()
-    )
+
+        print()
+        print(
+            "Fallback adducts:"
+        )
+
+        print(
+            queries[
+                "adduct"
+            ]
+            .value_counts(
+                dropna=False
+            )
+            .to_string()
+        )
 
     #
-    # These should genuinely be our negative-only molecules.
+    # An empty fallback branch is valid.
     #
-    non_negative = queries[
-        queries[
-            "ionization_mode"
-        ] != "negative"
-    ]
+    if not fallback_molecules:
+        write_empty_output()
+        return
 
-    if not non_negative.empty:
+    if queries.empty:
+        raise RuntimeError(
+            "Fallback molecules exist, but no query spectra "
+            "were found for them."
+        )
+
+    #
+    # Hidden-test robustness:
+    #
+    # Do NOT assume every molecule missed by positive MIST is
+    # negative-only. A positive molecule can miss the MIST branch
+    # because none of its formula hypotheses has a structure
+    # candidate. Retrieval therefore operates on the query's own
+    # ionization mode.
+    #
+    query_modes = sorted(
+        set(
+            queries[
+                "ionization_mode"
+            ]
+            .dropna()
+            .astype(str)
+        )
+    )
+
+    unsupported_modes = (
+        set(query_modes)
+        - {
+            "positive",
+            "negative",
+        }
+    )
+
+    if unsupported_modes:
         raise ValueError(
-            "Fallback set unexpectedly contains "
-            "non-negative spectra."
+            "Fallback contains unsupported ionization modes: "
+            f"{sorted(unsupported_modes)}"
         )
 
     #
@@ -256,92 +465,20 @@ def main():
     )
 
     #
-    # Restrict to negative reference spectra only.
+    # Build retrieval views only for polarities actually needed by
+    # the fallback set. On the visible test this remains negative-only,
+    # preserving the previous computation.
     #
-    negative_mask = (
-        metadata[
-            "ionization_mode"
-        ]
-        .astype(str)
-        .to_numpy()
-        == "negative"
-    )
+    reference_cache = {}
 
-    negative_indices = np.flatnonzero(
-        negative_mask
-    )
-
-    ref_meta = (
-        metadata.iloc[
-            negative_indices
-        ]
-        .reset_index(
-            drop=True
+    for mode in query_modes:
+        reference_cache[
+            mode
+        ] = build_reference_cache(
+            metadata,
+            vectors,
+            mode,
         )
-    )
-
-    ref_vectors = vectors[
-        negative_indices
-    ]
-
-    print(
-        "Negative reference spectra:",
-        len(ref_meta),
-    )
-
-    #
-    # Compute neutral masses for the negative reference library.
-    #
-    print(
-        "Computing negative reference neutral masses..."
-    )
-
-    ref_neutral_masses = np.empty(
-        len(ref_meta),
-        dtype=np.float64,
-    )
-
-    for i, row in enumerate(
-        ref_meta.itertuples(
-            index=False
-        )
-    ):
-        ref_neutral_masses[i] = (
-            infer_neutral_mass(
-                row.precursor_mz,
-                row.adduct,
-            )
-        )
-
-    finite_reference_mass = (
-        np.isfinite(
-            ref_neutral_masses
-        )
-    )
-
-    print(
-        "Negative references with supported adduct:",
-        int(
-            finite_reference_mass.sum()
-        ),
-    )
-
-    print(
-        "Negative references with unsupported adduct:",
-        int(
-            (
-                ~finite_reference_mass
-            ).sum()
-        ),
-    )
-
-    ref_keys = (
-        ref_meta[
-            "inchikey14"
-        ]
-        .astype(str)
-        .to_numpy()
-    )
 
     #
     # Aggregate retrieval scores across every spectrum belonging
@@ -351,16 +488,26 @@ def main():
         molecule_id: {}
         for molecule_id
         in sorted(
-            negative_molecules
+            fallback_molecules
         )
     }
 
     filtered_query_spectra = 0
-    fallback_query_spectra = 0
+    unfiltered_query_spectra = 0
+
+    filtered_by_mode = {
+        mode: 0
+        for mode in query_modes
+    }
+
+    unfiltered_by_mode = {
+        mode: 0
+        for mode in query_modes
+    }
 
     print()
     print(
-        "Searching negative spectra..."
+        "Searching fallback spectra..."
     )
 
     for query_number, row in enumerate(
@@ -372,6 +519,20 @@ def main():
         molecule_id = str(
             row.molecule_id
         )
+
+        ionization_mode = str(
+            row.ionization_mode
+        )
+
+        ref = reference_cache.get(
+            ionization_mode
+        )
+
+        if ref is None:
+            raise RuntimeError(
+                "No retrieval reference cache for "
+                f"ionization mode {ionization_mode!r}."
+            )
 
         query_vector = bin_spectrum(
             row.ms2_mzs,
@@ -389,7 +550,8 @@ def main():
         # Frozen Baseline-2 behavior:
         #
         # Use same-polarity candidates within ±0.01 Da whenever
-        # at least one such candidate exists.
+        # at least one such candidate exists. Otherwise use all
+        # same-polarity reference spectra.
         #
         use_filtered = False
         candidate_indices = None
@@ -398,10 +560,14 @@ def main():
             query_mass
         ):
             mass_mask = (
-                finite_reference_mass
+                ref[
+                    "finite_mass"
+                ]
                 & (
                     np.abs(
-                        ref_neutral_masses
+                        ref[
+                            "neutral_masses"
+                        ]
                         - query_mass
                     )
                     <= NEUTRAL_MASS_TOLERANCE_DA
@@ -421,31 +587,45 @@ def main():
 
         if use_filtered:
             filtered_query_spectra += 1
+            filtered_by_mode[
+                ionization_mode
+            ] += 1
 
             candidate_vectors = (
-                ref_vectors[
+                ref[
+                    "vectors"
+                ][
                     candidate_indices
                 ]
             )
 
             candidate_keys = (
-                ref_keys[
+                ref[
+                    "keys"
+                ][
                     candidate_indices
                 ]
             )
 
         else:
             #
-            # Same-negative-mode cosine fallback.
+            # Same-polarity cosine fallback.
             #
-            fallback_query_spectra += 1
+            unfiltered_query_spectra += 1
+            unfiltered_by_mode[
+                ionization_mode
+            ] += 1
 
             candidate_vectors = (
-                ref_vectors
+                ref[
+                    "vectors"
+                ]
             )
 
             candidate_keys = (
-                ref_keys
+                ref[
+                    "keys"
+                ]
             )
 
         #
@@ -500,9 +680,16 @@ def main():
     )
 
     print(
-        "Same-mode fallback query spectra:",
-        fallback_query_spectra,
+        "Same-polarity unfiltered query spectra:",
+        unfiltered_query_spectra,
     )
+
+    for mode in query_modes:
+        print(
+            f"  {mode}: "
+            f"{filtered_by_mode[mode]} mass-filtered, "
+            f"{unfiltered_by_mode[mode]} unfiltered"
+        )
 
     #
     # Turn final molecule-level scores into ranked rows.
@@ -548,17 +735,72 @@ def main():
                         rank,
 
                     "ranking_method":
-                        "negative_neutral_mass_retrieval",
+                        "same_polarity_neutral_mass_retrieval",
                 }
             )
 
     ranked = pd.DataFrame(
-        result_rows
+        result_rows,
+        columns=[
+            "molecule_id",
+            "candidate_inchikey14",
+            "retrieval_cosine",
+            "rank",
+            "ranking_method",
+        ],
     )
 
-    if ranked.empty:
+    #
+    # At this point a non-empty fallback set really should have
+    # produced rankings. Report exactly which molecules failed.
+    #
+    ranked_molecules = set(
+        ranked[
+            "molecule_id"
+        ].astype(str)
+    )
+
+    missing_rankings = sorted(
+        fallback_molecules
+        - ranked_molecules
+    )
+
+    if missing_rankings:
+        print()
+        print(
+            "Fallback molecules with no retrieval ranking:",
+            len(missing_rankings),
+        )
+
+        print(
+            test.loc[
+                test[
+                    "molecule_id"
+                ].isin(
+                    missing_rankings
+                ),
+                [
+                    "molecule_id",
+                    "ionization_mode",
+                    "adduct",
+                ],
+            ]
+            .drop_duplicates()
+            .sort_values(
+                [
+                    "molecule_id",
+                    "ionization_mode",
+                    "adduct",
+                ]
+            )
+            .to_string(
+                index=False
+            )
+        )
+
         raise RuntimeError(
-            "Negative retrieval produced no rankings."
+            f"{len(missing_rankings)} fallback molecules "
+            "produced no retrieval ranking."
         )
 
     #
@@ -598,18 +840,96 @@ def main():
     )
 
     #
+    # A retrieval hit without a usable SMILES cannot appear in a
+    # Kaggle submission. Drop those hits and promote the next valid
+    # candidate for the molecule.
+    #
+    missing_smiles = (
+            ranked["candidate_smiles"].isna()
+            | (
+                    ranked["candidate_smiles"]
+                    .astype(str)
+                    .str.strip()
+                    == ""
+            )
+    )
+
+    if missing_smiles.any():
+        print()
+        print(
+            "Dropping candidate rows without usable SMILES:",
+            int(missing_smiles.sum()),
+        )
+
+        ranked = (
+            ranked.loc[
+                ~missing_smiles
+            ]
+            .copy()
+        )
+
+    #
+    # Re-rank after removing unusable structures.
+    #
+    ranked = ranked.sort_values(
+        [
+            "molecule_id",
+            "retrieval_cosine",
+            "candidate_inchikey14",
+        ],
+        ascending=[
+            True,
+            False,
+            True,
+        ],
+    ).reset_index(
+        drop=True
+    )
+
+    ranked["rank"] = (
+            ranked.groupby(
+                "molecule_id"
+            )
+            .cumcount()
+            + 1
+    )
+
+    #
+    # Verify every fallback molecule still has at least one usable
+    # submission candidate.
+    #
+    ranked_molecules = set(
+        ranked["molecule_id"]
+        .astype(str)
+    )
+
+    missing_after_smiles = sorted(
+        fallback_molecules
+        - ranked_molecules
+    )
+
+    if missing_after_smiles:
+        raise RuntimeError(
+            f"{len(missing_after_smiles)} fallback molecules "
+            "have no retrieval candidates with usable SMILES. "
+            f"Examples: {missing_after_smiles[:20]}"
+        )
+
+    ranked = ranked[
+        OUTPUT_COLUMNS
+    ]
+
+    #
     # Keep useful ranking columns together.
     #
     ranked = ranked[
-        [
-            "molecule_id",
-            "candidate_inchikey14",
-            "candidate_smiles",
-            "retrieval_cosine",
-            "rank",
-            "ranking_method",
-        ]
+        OUTPUT_COLUMNS
     ]
+
+    OUTPUT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     ranked.to_parquet(
         OUTPUT_PATH,
@@ -625,8 +945,9 @@ def main():
 
     print()
     print(
-        "Negative retrieval ranking"
+        "Fallback retrieval ranking"
     )
+
     print(
         "--------------------------"
     )
@@ -643,35 +964,36 @@ def main():
         len(ranked),
     )
 
-    print(
-        "Candidates/molecule min:",
-        int(
-            counts.min()
-        ),
-    )
+    if not counts.empty:
+        print(
+            "Candidates/molecule min:",
+            int(
+                counts.min()
+            ),
+        )
 
-    print(
-        "Candidates/molecule median:",
-        float(
-            counts.median()
-        ),
-    )
+        print(
+            "Candidates/molecule median:",
+            float(
+                counts.median()
+            ),
+        )
 
-    print(
-        "Candidates/molecule max:",
-        int(
-            counts.max()
-        ),
-    )
+        print(
+            "Candidates/molecule max:",
+            int(
+                counts.max()
+            ),
+        )
 
-    print(
-        "Molecules with >=25 candidates:",
-        int(
-            (
-                counts >= 25
-            ).sum()
-        ),
-    )
+        print(
+            "Molecules with >=25 candidates:",
+            int(
+                (
+                    counts >= 25
+                ).sum()
+            ),
+        )
 
     missing_smiles = (
         ranked[

@@ -1,11 +1,17 @@
-from pathlib import Path
+from __future__ import annotations
+
+import os
 import pickle
+from pathlib import Path
 
 import pandas as pd
 
 
 PROJECT_ROOT = Path(
-    "/home/colleen/PycharmProjects/Envada-CASMI-2026"
+    os.environ.get(
+        "CASMI26_PROJECT_ROOT",
+        Path(__file__).resolve().parent.parent,
+    )
 )
 
 TEST_ROOT = (
@@ -42,11 +48,58 @@ OUTPUT_PATH = (
 MASS_PENALTY = 0.020
 
 
+OUTPUT_COLUMNS = [
+    "molecule_id",
+    "hypothesis_spec",
+    "candidate_formula",
+    "candidate_inchikey14",
+    "candidate_smiles",
+    "selected_adduct",
+    "selected_mass_error_ppm",
+    "contrastive_distance",
+    "final_score",
+    "rank",
+]
+
+
 def to_str(value):
-    if isinstance(value, bytes):
+    if isinstance(
+        value,
+        bytes,
+    ):
         return value.decode()
 
     return str(value)
+
+
+def write_empty_output(
+    message: str,
+) -> None:
+    print()
+    print(message)
+
+    empty = pd.DataFrame(
+        columns=OUTPUT_COLUMNS
+    )
+
+    empty.to_parquet(
+        OUTPUT_PATH,
+        index=False,
+    )
+
+    print(
+        "Wrote empty positive ranking."
+    )
+
+    print(
+        "These molecules will be handled by "
+        "the same-polarity retrieval fallback."
+    )
+
+    print()
+    print(
+        f"Wrote {OUTPUT_PATH}"
+    )
 
 
 def main():
@@ -55,7 +108,7 @@ def main():
     )
 
     #
-    # Only hypotheses actually supported by the MIST checkpoint.
+    # Only hypotheses supported by the positive MIST checkpoint.
     #
     supported_adducts = {
         "[M+H]+",
@@ -84,6 +137,16 @@ def main():
         ].nunique(),
     )
 
+    #
+    # A hidden test may legitimately have no positive hypotheses.
+    # That is not fatal: the fallback branch will handle all molecules.
+    #
+    if hypotheses.empty:
+        write_empty_output(
+            "No MIST-supported positive hypotheses."
+        )
+        return
+
     if hypotheses[
         "hypothesis_spec"
     ].duplicated().any():
@@ -98,6 +161,16 @@ def main():
         )
     )
 
+    #
+    # If we have positive hypotheses, the MIST retrieval artifact
+    # should exist. Missing it means the upstream MIST step failed.
+    #
+    if not PREDICTIONS_PATH.exists():
+        raise FileNotFoundError(
+            "Expected positive MIST prediction artifact was not found: "
+            f"{PREDICTIONS_PATH}"
+        )
+
     with PREDICTIONS_PATH.open(
         "rb"
     ) as f:
@@ -109,6 +182,26 @@ def main():
             retrieval.keys()
         ),
     )
+
+    required_retrieval_keys = {
+        "names",
+        "ikeys",
+        "smiles",
+        "dists",
+    }
+
+    missing_keys = (
+        required_retrieval_keys
+        - set(
+            retrieval.keys()
+        )
+    )
+
+    if missing_keys:
+        raise ValueError(
+            "Retrieval artifact is missing keys: "
+            f"{sorted(missing_keys)}"
+        )
 
     names = [
         to_str(x)
@@ -143,6 +236,16 @@ def main():
         raise ValueError(
             "Retrieval arrays have inconsistent lengths."
         )
+
+    #
+    # Empty retrieval output is legal. The fallback branch will handle
+    # any molecules that do not receive a positive MIST ranking.
+    #
+    if not names:
+        write_empty_output(
+            "MIST returned no positive retrieval hypotheses."
+        )
+        return
 
     #
     # Every retrieval hypothesis should correspond to one of our
@@ -294,6 +397,16 @@ def main():
                 }
             )
 
+    #
+    # MIST may return hypothesis names but no candidate structures.
+    # That is also a valid fallback case.
+    #
+    if not rows:
+        write_empty_output(
+            "MIST returned no positive candidate structures."
+        )
+        return
+
     ranked = pd.DataFrame(
         rows
     )
@@ -363,6 +476,14 @@ def main():
         + 1
     )
 
+    #
+    # Keep the output schema stable even if pandas column ordering
+    # changes during earlier operations.
+    #
+    ranked = ranked[
+        OUTPUT_COLUMNS
+    ]
+
     ranked.to_parquet(
         OUTPUT_PATH,
         index=False,
@@ -372,6 +493,7 @@ def main():
     print(
         "Positive contrastive ranking"
     )
+
     print(
         "----------------------------"
     )

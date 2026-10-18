@@ -3,8 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from rdkit import Chem
-from rdkit.Chem import AllChem
-
+from rdkit.Chem import rdFingerprintGenerator
 
 ROOT = Path(
     "/home/colleen/PycharmProjects/Envada-CASMI-2026/"
@@ -33,11 +32,12 @@ def fingerprint_smiles(smiles: str):
     if mol is None:
         return None
 
-    fp = AllChem.GetMorganFingerprintAsBitVect(
-        mol,
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(
         radius=RADIUS,
-        nBits=N_BITS,
-    )
+        fpSize=N_BITS, )
+
+    # 2. Generate the fingerprint from the molecule
+    fp = mfpgen.GetFingerprint(mol)
 
     arr = np.zeros(
         (N_BITS,),

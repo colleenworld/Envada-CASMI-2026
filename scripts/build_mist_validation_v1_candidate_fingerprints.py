@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import AllChem
-
+from rdkit.Chem import rdFingerprintGenerator
 
 ROOT = Path("data/processed/mist/validation_500")
 
@@ -38,12 +38,13 @@ def make_fp(smiles: str):
     if mol is None:
         return None
 
-    fp = AllChem.GetMorganFingerprintAsBitVect(
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(
         mol,
         radius=RADIUS,
         nBits=N_BITS,
     )
 
+    fp = mfpgen.GetFingerprint(mol)
     bit_string = fp.ToBitString()
 
     return np.fromiter(

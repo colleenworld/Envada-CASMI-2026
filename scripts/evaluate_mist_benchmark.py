@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdFingerprintGenerator
 
 
 BENCHMARK_DIR = Path("data/processed/mist/benchmark_100")
@@ -27,12 +27,11 @@ def morgan4096(smiles: str) -> np.ndarray:
     if mol is None:
         raise ValueError(f"Could not parse SMILES: {smiles}")
 
-    fingerprint = AllChem.GetMorganFingerprintAsBitVect(
-        mol,
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(
         radius=2,
-        nBits=4096,
+        fpSize=4096,
     )
-
+    fingerprint = mfpgen.GetFingerprint(mol)
     array = np.zeros((4096,), dtype=np.float32)
     DataStructs.ConvertToNumpyArray(fingerprint, array)
 

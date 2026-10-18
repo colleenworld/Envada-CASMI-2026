@@ -4,7 +4,7 @@ import pickle
 import numpy as np
 import pandas as pd
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import rdFingerprintGenerator
 
 
 ROOT = Path("data/processed/mist/validation_500")
@@ -24,11 +24,12 @@ def morgan4096(smiles: str):
     if mol is None:
         return None
 
-    fp = AllChem.GetMorganFingerprintAsBitVect(
-        mol,
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(
         radius=2,
-        nBits=4096,
-    )
+        fpSize=4096,)
+
+    # 2. Generate the fingerprint from the molecule
+    fp = mfpgen.GetFingerprint(mol)
 
     arr = np.zeros(4096, dtype=np.float32)
     for idx in fp.GetOnBits():

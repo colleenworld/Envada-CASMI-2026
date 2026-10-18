@@ -6,7 +6,7 @@ import pandas as pd
 
 
 PROJECT_ROOT = Path(
-    "/home/colleen/PycharmProjects/Envada-CASMI-2026"
+    Path(__file__).resolve().parent.parent
 )
 
 MIST_ROOT = Path(
