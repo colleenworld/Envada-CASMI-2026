@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import pickle
+import json
+import shutil
 import subprocess
 import sys
 import time
@@ -77,11 +78,16 @@ def parse_args():
     parser.add_argument(
         "--mist-python",
         type=Path,
-        default=Path(
-            os.environ.get(
-                "MIST_PYTHON",
-                sys.executable,
+        default=(
+            Path(
+                os.environ[
+                    "MIST_PYTHON"
+                ]
             )
+            if os.environ.get(
+                "MIST_PYTHON"
+            )
+            else None
         ),
     )
 
@@ -92,6 +98,75 @@ def parse_args():
     )
 
     return parser.parse_args()
+
+
+def resolve_mist_python(
+    explicit: Path | None,
+) -> Path:
+    if explicit is not None:
+        path = explicit.expanduser().resolve()
+
+        if not path.exists():
+            raise FileNotFoundError(
+                f"MIST Python does not exist: {path}"
+            )
+
+        return path
+
+    conda = shutil.which(
+        "conda"
+    )
+
+    if conda:
+        completed = subprocess.run(
+            [
+                conda,
+                "env",
+                "list",
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        payload = json.loads(
+            completed.stdout
+        )
+
+        for env_path in payload.get(
+            "envs",
+            [],
+        ):
+            env_path = Path(
+                env_path
+            )
+
+            if env_path.name == "mist-cpu":
+                python_path = (
+                    env_path
+                    / "bin/python"
+                )
+
+                if python_path.exists():
+                    return python_path
+
+    candidates = [
+        Path.home()
+        / "miniconda3/envs/mist-cpu/bin/python",
+        Path.home()
+        / "anaconda3/envs/mist-cpu/bin/python",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    raise FileNotFoundError(
+        "Could not locate the mist-cpu Python interpreter. "
+        "Pass --mist-python /path/to/mist-cpu/bin/python "
+        "or set MIST_PYTHON."
+    )
 
 
 def run(
@@ -121,8 +196,14 @@ def main() -> None:
         args.mist_root.resolve()
     )
 
+    mist_python_path = (
+        resolve_mist_python(
+            args.mist_python
+        )
+    )
+
     mist_python = str(
-        args.mist_python
+        mist_python_path
     )
 
     assign_script = (
@@ -227,45 +308,35 @@ def main() -> None:
     )
 
     #
-    # 2. Build the Morgan-4096 retrieval database from the selected
-    #    PubChem formula candidates.
+    # 2. Build the Morgan-4096 retrieval database inside the MIST
+    #    environment as well. Importing MIST from the project's
+    #    Python 3.14 environment is not supported.
     #
-    sys.path.insert(
-        0,
-        str(
-            mist_root
-            / "src"
-        ),
-    )
-
-    from mist.retrieval_lib.make_hdf5 import (
-        make_retrieval_hdf5,
-    )
-
-    with FORM_TO_SMI_PATH.open(
-        "rb"
-    ) as handle:
-        form_to_smi = pickle.load(
-            handle
-        )
-
     print()
     print(
         "Building MIST Morgan-4096 retrieval HDF..."
     )
 
-    make_retrieval_hdf5(
-        labels_file=str(
-            LABELS_PATH
-        ),
-        form_to_smi=form_to_smi,
-        output_dir=str(
-            HDF_DIR
-        ),
-        database_name=DATABASE_NAME,
-        fp_names=[
-            "morgan4096",
+    hdf_builder_code = (
+        "import pickle, sys; "
+        f"sys.path.insert(0, {str(mist_root / 'src')!r}); "
+        "from mist.retrieval_lib.make_hdf5 import make_retrieval_hdf5; "
+        f"form_to_smi=pickle.load(open({str(FORM_TO_SMI_PATH)!r}, 'rb')); "
+        "make_retrieval_hdf5("
+        f"labels_file={str(LABELS_PATH)!r}, "
+        "form_to_smi=form_to_smi, "
+        f"output_dir={str(HDF_DIR)!r}, "
+        f"database_name={DATABASE_NAME!r}, "
+        "fp_names=['morgan4096'])"
+    )
+
+    run(
+        [
+            mist_python,
+            "-c",
+            hdf_builder_code,
         ],
+        cwd=mist_root,
     )
 
     hdf_files = sorted(
