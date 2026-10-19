@@ -35,6 +35,11 @@ FORM_TO_SMI_PATH = (
     / "form_to_smi.pkl"
 )
 
+SANITIZED_FORM_TO_SMI_PATH = (
+    BENCHMARK_DIR
+    / "form_to_smi_sanitized.pkl"
+)
+
 SUBFORMS_DIR = (
     BENCHMARK_DIR
     / "subforms"
@@ -308,7 +313,62 @@ def main() -> None:
     )
 
     #
-    # 2. Build the Morgan-4096 retrieval database inside the MIST
+    # 2. Sanitize PubChem candidate SMILES with the exact RDKit
+    #    version used by the MIST environment. PubChem occasionally
+    #    returns structures that this older RDKit cannot parse; MIST's
+    #    Morgan featurizer otherwise crashes on those entries.
+    #
+    print()
+    print(
+        "Sanitizing candidate SMILES in MIST environment..."
+    )
+
+    sanitize_code = (
+        "import pickle; "
+        "from rdkit import Chem, RDLogger; "
+        "RDLogger.DisableLog('rdApp.*'); "
+        f"src={str(FORM_TO_SMI_PATH)!r}; "
+        f"dst={str(SANITIZED_FORM_TO_SMI_PATH)!r}; "
+        "data=pickle.load(open(src,'rb')); "
+        "out={}; total=0; kept=0; removed=0; "
+        "\nfor formula, entries in data.items():"
+        "\n    clean=[]"
+        "\n    seen=set()"
+        "\n    for entry in entries:"
+        "\n        total += 1"
+        "\n        smi=str(entry['smi'])"
+        "\n        mol=Chem.MolFromSmiles(smi)"
+        "\n        if mol is None:"
+        "\n            removed += 1"
+        "\n            continue"
+        "\n        canonical=Chem.MolToSmiles(mol,isomericSmiles=False)"
+        "\n        ikey=str(entry['ikey'])"
+        "\n        key=(ikey,canonical)"
+        "\n        if key in seen:"
+        "\n            continue"
+        "\n        seen.add(key)"
+        "\n        clean.append({'smi':canonical,'ikey':ikey})"
+        "\n        kept += 1"
+        "\n    if clean:"
+        "\n        out[formula]=clean"
+        "\npickle.dump(out,open(dst,'wb'))"
+        "\nprint(f'Candidate SMILES total: {total:,}')"
+        "\nprint(f'Candidate SMILES kept: {kept:,}')"
+        "\nprint(f'Candidate SMILES removed as invalid: {removed:,}')"
+        "\nprint(f'Formulas retained: {len(out):,}')"
+    )
+
+    run(
+        [
+            mist_python,
+            "-c",
+            sanitize_code,
+        ],
+        cwd=mist_root,
+    )
+
+    #
+    # 3. Build the Morgan-4096 retrieval database inside the MIST
     #    environment as well. Importing MIST from the project's
     #    Python 3.14 environment is not supported.
     #
@@ -321,7 +381,7 @@ def main() -> None:
         "import pickle, sys; "
         f"sys.path.insert(0, {str(mist_root / 'src')!r}); "
         "from mist.retrieval_lib.make_hdf5 import make_retrieval_hdf5; "
-        f"form_to_smi=pickle.load(open({str(FORM_TO_SMI_PATH)!r}, 'rb')); "
+        f"form_to_smi=pickle.load(open({str(SANITIZED_FORM_TO_SMI_PATH)!r}, 'rb')); "
         "make_retrieval_hdf5("
         f"labels_file={str(LABELS_PATH)!r}, "
         "form_to_smi=form_to_smi, "
