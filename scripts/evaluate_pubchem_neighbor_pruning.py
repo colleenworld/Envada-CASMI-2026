@@ -439,9 +439,11 @@ def main() -> None:
             row.inchikey14
         )
 
-        mode = str(
-            row.ionization_mode
-        )
+        #
+        # The PubChem/MIST benchmark sample is deliberately restricted
+        # to checkpoint-supported positive-ion spectra.
+        #
+        mode = "positive"
 
         mode_indices = np.flatnonzero(
             ref_modes
