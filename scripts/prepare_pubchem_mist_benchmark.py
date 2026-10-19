@@ -198,7 +198,6 @@ def choose_positive_spectrum(
     supported = supported.sort_values(
         [
             "_priority",
-            "spectrum_id",
         ]
     )
 
@@ -369,9 +368,7 @@ def main() -> None:
                 "inchikey14":
                     inchikey14,
                 "spectrum_id":
-                    str(
-                        selected.spectrum_id
-                    ),
+                    f"validation_{inchikey14}",
                 "precursor_mz":
                     float(
                         selected.precursor_mz
