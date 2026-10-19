@@ -16,6 +16,17 @@ cp -a data/processed/structure_index \
 cp -a data/processed/retrieval_index \
       kaggle/casmi26-inference-assets/project/data/processed/
 
+if [ ! -d data/processed/pubchem_formula_index ]; then
+  echo "Missing data/processed/pubchem_formula_index"
+  echo "Run:"
+  echo "  python scripts/build_pubchem_formula_candidates.py --source formula-index"
+  echo "  python scripts/build_pubchem_inference_asset.py"
+  exit 1
+fi
+
+cp -a data/processed/pubchem_formula_index \
+      kaggle/casmi26-inference-assets/project/data/processed/
+
 mkdir -p kaggle/casmi26-inference-assets/project/data/external
 
 cp -a data/external/coconut \
