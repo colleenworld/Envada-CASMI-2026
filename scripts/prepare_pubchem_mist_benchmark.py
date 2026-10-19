@@ -323,10 +323,16 @@ def main() -> None:
         validate="many_to_one",
     )
 
-    truth = truth.loc[
-        ~truth[
+    fetch_failed_mask = (
+        truth[
             "fetch_failed"
-        ].fillna(False)
+        ]
+        .fillna(False)
+        .astype(bool)
+    )
+
+    truth = truth.loc[
+        ~fetch_failed_mask
     ].copy()
 
     #
