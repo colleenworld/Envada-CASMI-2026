@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib import error, parse, request
 
@@ -43,9 +45,17 @@ CACHE_ROOT = (
     / "data/external/pubchem/formula_cache"
 )
 
-MIN_REQUEST_INTERVAL_SECONDS = 0.30
+DEFAULT_WORKERS = 4
+DEFAULT_REQUESTS_PER_SECOND = 4.0
 
 MAX_RETRIES = 6
+
+_REQUEST_LOCK = threading.Lock()
+_NEXT_REQUEST_TIME = 0.0
+_REQUEST_INTERVAL_SECONDS = (
+    1.0
+    / DEFAULT_REQUESTS_PER_SECOND
+)
 
 RETRYABLE_STATUS_CODES = {
     429,
@@ -84,6 +94,26 @@ def parse_args():
         help=(
             "Maximum PubChem records requested per formula. "
             "Formulas that reach this limit are explicitly flagged."
+        ),
+    )
+
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=(
+            "Concurrent formula requests. Requests are still governed "
+            "by the global requests-per-second limiter."
+        ),
+    )
+
+    parser.add_argument(
+        "--requests-per-second",
+        type=float,
+        default=DEFAULT_REQUESTS_PER_SECOND,
+        help=(
+            "Global PubChem request start rate. Keep this below the "
+            "published 5 requests/second service limit."
         ),
     )
 
@@ -151,6 +181,36 @@ def cache_path_for_formula(
     )
 
 
+def wait_for_request_slot() -> None:
+    """
+    Enforce one global request-start rate across all worker threads.
+
+    PubChem's published usage policy asks clients to stay below
+    5 requests/second. Retries pass through this limiter as well.
+    """
+    global _NEXT_REQUEST_TIME
+
+    with _REQUEST_LOCK:
+        now = time.monotonic()
+
+        wait = (
+            _NEXT_REQUEST_TIME
+            - now
+        )
+
+        if wait > 0:
+            time.sleep(
+                wait
+            )
+
+        started = time.monotonic()
+
+        _NEXT_REQUEST_TIME = (
+            started
+            + _REQUEST_INTERVAL_SECONDS
+        )
+
+
 def fetch_formula(
     molecular_formula: str,
     max_records: int,
@@ -183,6 +243,8 @@ def fetch_formula(
         )
 
         try:
+            wait_for_request_slot()
+
             with request.urlopen(
                 req,
                 timeout=120,
@@ -349,12 +411,34 @@ def percentile(
 
 
 def main() -> None:
+    global _REQUEST_INTERVAL_SECONDS
+
     args = parse_args()
 
     if args.max_records <= 0:
         raise ValueError(
             "--max-records must be positive"
         )
+
+    if args.workers <= 0:
+        raise ValueError(
+            "--workers must be positive"
+        )
+
+    if (
+        args.requests_per_second <= 0
+        or args.requests_per_second >= 5
+    ):
+        raise ValueError(
+            "--requests-per-second must be > 0 and < 5"
+        )
+
+    _REQUEST_INTERVAL_SECONDS = (
+        1.0
+        / float(
+            args.requests_per_second
+        )
+    )
 
     formulas = load_formula_set(
         args.source
@@ -372,31 +456,32 @@ def main() -> None:
         "Max records/formula:",
         f"{args.max_records:,}",
     )
+    print(
+        "Workers:",
+        args.workers,
+    )
+    print(
+        "Global request rate:",
+        f"{args.requests_per_second:.2f}/second",
+    )
 
     candidate_frames = []
     status_rows = []
 
-    for number, formula in enumerate(
-        formulas,
-        start=1,
-    ):
+    def process_formula(
+        formula: str,
+    ) -> tuple[
+        str,
+        pd.DataFrame,
+        dict,
+        bool,
+    ]:
         result, cached = (
             load_or_fetch_formula(
                 args.source,
                 formula,
                 args.max_records,
             )
-        )
-
-        fetch_failed = bool(
-            result.get(
-                "fetch_failed",
-                False,
-            )
-        )
-
-        fetch_error = result.get(
-            "fetch_error"
         )
 
         parsed = parse_formula_properties(
@@ -407,57 +492,98 @@ def main() -> None:
             ),
         )
 
-        if not parsed.empty:
-            candidate_frames.append(
-                parsed
-            )
-
-        status_rows.append(
-            {
-                "molecular_formula":
-                    formula,
-                "raw_record_count":
-                    int(
-                        result.get(
-                            "raw_record_count",
-                            0,
-                        )
-                    ),
-                "candidate_count":
-                    len(parsed),
-                "hit_max_records":
-                    bool(
-                        result.get(
-                            "hit_max_records",
-                            False,
-                        )
-                    ),
-                "fetch_failed":
-                    fetch_failed,
-                "fetch_error":
-                    fetch_error,
-            }
+        return (
+            formula,
+            parsed,
+            result,
+            cached,
         )
 
-        if fetch_failed:
-            marker = "FAILED - will retry next run"
-        else:
-            marker = (
-                "cached"
-                if cached
-                else "fetched"
+    completed = 0
+
+    with ThreadPoolExecutor(
+        max_workers=args.workers
+    ) as executor:
+        futures = {
+            executor.submit(
+                process_formula,
+                formula,
+            ):
+                formula
+            for formula in formulas
+        }
+
+        for future in as_completed(
+            futures
+        ):
+            (
+                formula,
+                parsed,
+                result,
+                cached,
+            ) = future.result()
+
+            completed += 1
+
+            fetch_failed = bool(
+                result.get(
+                    "fetch_failed",
+                    False,
+                )
             )
 
-        print(
-            f"  {number:,}/{len(formulas):,} "
-            f"{formula}: "
-            f"{len(parsed):,} unique structures "
-            f"({marker})"
-        )
+            fetch_error = result.get(
+                "fetch_error"
+            )
 
-        if not cached:
-            time.sleep(
-                MIN_REQUEST_INTERVAL_SECONDS
+            if not parsed.empty:
+                candidate_frames.append(
+                    parsed
+                )
+
+            status_rows.append(
+                {
+                    "molecular_formula":
+                        formula,
+                    "raw_record_count":
+                        int(
+                            result.get(
+                                "raw_record_count",
+                                0,
+                            )
+                        ),
+                    "candidate_count":
+                        len(parsed),
+                    "hit_max_records":
+                        bool(
+                            result.get(
+                                "hit_max_records",
+                                False,
+                            )
+                        ),
+                    "fetch_failed":
+                        fetch_failed,
+                    "fetch_error":
+                        fetch_error,
+                }
+            )
+
+            if fetch_failed:
+                marker = (
+                    "FAILED - will retry next run"
+                )
+            else:
+                marker = (
+                    "cached"
+                    if cached
+                    else "fetched"
+                )
+
+            print(
+                f"  {completed:,}/{len(formulas):,} "
+                f"{formula}: "
+                f"{len(parsed):,} unique structures "
+                f"({marker})"
             )
 
     if candidate_frames:
