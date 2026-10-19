@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from rdkit import Chem, DataStructs, RDLogger
+from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem
 
 from casmi26.evaluation.strict_validation import (
@@ -13,6 +13,9 @@ from casmi26.evaluation.strict_validation import (
 )
 from casmi26.retrieval.index import (
     load_retrieval_index,
+)
+from casmi26.pubchem.neighbor_pruning import (
+    score_candidates,
 )
 from casmi26.spectra.binning import (
     bin_spectrum,
@@ -266,77 +269,6 @@ def top_structure_neighbors(
     return ordered[
         :count
     ]
-
-
-def score_candidates(
-    candidate_fps: list,
-    neighbors: list[
-        tuple[
-            str,
-            float,
-        ]
-    ],
-    training_fps: dict,
-) -> tuple[
-    np.ndarray,
-    int,
-]:
-    scores = np.zeros(
-        len(
-            candidate_fps
-        ),
-        dtype=np.float32,
-    )
-
-    usable_neighbors = 0
-
-    for (
-        neighbor_key,
-        spectral_score,
-    ) in neighbors:
-        neighbor_fp = (
-            training_fps.get(
-                neighbor_key
-            )
-        )
-
-        if neighbor_fp is None:
-            continue
-
-        usable_neighbors += 1
-
-        similarities = np.asarray(
-            DataStructs.BulkTanimotoSimilarity(
-                neighbor_fp,
-                candidate_fps,
-            ),
-            dtype=np.float32,
-        )
-
-        #
-        # Weight structural resemblance by how strongly the unknown
-        # spectrum matched this known training structure.
-        #
-        weighted = (
-            similarities
-            * max(
-                float(
-                    spectral_score
-                ),
-                0.0,
-            )
-        )
-
-        np.maximum(
-            scores,
-            weighted,
-            out=scores,
-        )
-
-    return (
-        scores,
-        usable_neighbors,
-    )
 
 
 def main() -> None:
