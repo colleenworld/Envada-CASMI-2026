@@ -287,6 +287,70 @@ def main() -> None:
         CANDIDATES_PATH
     )
 
+    required_sample_columns = {
+        "spec",
+        "inchikey14",
+        "truth_formula",
+        "candidate_count",
+        "burden_bucket",
+        "mist_ionization",
+        "ms2_mzs",
+        "ms2_normalized_intensities",
+    }
+
+    missing_sample_columns = (
+        required_sample_columns
+        - set(sample.columns)
+    )
+
+    if missing_sample_columns:
+        raise ValueError(
+            "Benchmark sample is missing required columns: "
+            f"{sorted(missing_sample_columns)}"
+        )
+
+    supported_positive_ionizations = {
+        "[M+H]+",
+        "[M+Na]+",
+        "[M+K]+",
+        "[M+H3N+H]+",
+    }
+
+    unexpected_ionizations = sorted(
+        set(
+            sample[
+                "mist_ionization"
+            ]
+            .dropna()
+            .astype(str)
+        )
+        - supported_positive_ionizations
+    )
+
+    if unexpected_ionizations:
+        raise ValueError(
+            "Neighbor-pruning benchmark expects the existing "
+            "positive-only MIST sample, but found unsupported "
+            f"ionizations: {unexpected_ionizations}"
+        )
+
+    required_candidate_columns = {
+        "spec",
+        "inchikey14",
+        "smiles",
+    }
+
+    missing_candidate_columns = (
+        required_candidate_columns
+        - set(candidates.columns)
+    )
+
+    if missing_candidate_columns:
+        raise ValueError(
+            "Benchmark candidates are missing required columns: "
+            f"{sorted(missing_candidate_columns)}"
+        )
+
     sample = sample.loc[
         sample[
             "candidate_count"
