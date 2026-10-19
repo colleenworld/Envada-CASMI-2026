@@ -264,10 +264,20 @@ def fetch_formula(
                 delay
             )
 
-    raise RuntimeError(
-        "PubChem formula request failed after retries: "
-        f"{molecular_formula}"
-    ) from last_error
+    return {
+        "molecular_formula":
+            molecular_formula,
+        "properties":
+            [],
+        "raw_record_count":
+            0,
+        "hit_max_records":
+            False,
+        "fetch_failed":
+            True,
+        "fetch_error":
+            str(last_error),
+    }
 
 
 def load_or_fetch_formula(
@@ -299,16 +309,24 @@ def load_or_fetch_formula(
         exist_ok=True,
     )
 
-    cache_path.write_text(
-        json.dumps(
-            result,
-            separators=(
-                ",",
-                ":",
-            ),
+    #
+    # Do not cache transient failures as empty PubChem results.
+    # A later rerun should retry them automatically.
+    #
+    if not result.get(
+        "fetch_failed",
+        False,
+    ):
+        cache_path.write_text(
+            json.dumps(
+                result,
+                separators=(
+                    ",",
+                    ":",
+                ),
+            )
+            + "\n"
         )
-        + "\n"
-    )
 
     return result, False
 
@@ -370,6 +388,17 @@ def main() -> None:
             )
         )
 
+        fetch_failed = bool(
+            result.get(
+                "fetch_failed",
+                False,
+            )
+        )
+
+        fetch_error = result.get(
+            "fetch_error"
+        )
+
         parsed = parse_formula_properties(
             formula,
             result.get(
@@ -403,14 +432,21 @@ def main() -> None:
                             False,
                         )
                     ),
+                "fetch_failed":
+                    fetch_failed,
+                "fetch_error":
+                    fetch_error,
             }
         )
 
-        marker = (
-            "cached"
-            if cached
-            else "fetched"
-        )
+        if fetch_failed:
+            marker = "FAILED - will retry next run"
+        else:
+            marker = (
+                "cached"
+                if cached
+                else "fetched"
+            )
 
         print(
             f"  {number:,}/{len(formulas):,} "
@@ -469,6 +505,8 @@ def main() -> None:
                 "molecular_formula",
                 "raw_record_count",
                 "hit_max_records",
+                "fetch_failed",
+                "fetch_error",
             ]
         ],
         on="molecular_formula",
@@ -521,8 +559,24 @@ def main() -> None:
     capped_count = int(
         burden[
             "hit_max_records"
-        ].sum()
+        ].fillna(False).sum()
     )
+
+    failed_count = int(
+        burden[
+            "fetch_failed"
+        ].fillna(False).sum()
+    )
+
+    completed_burden = burden.loc[
+        ~burden[
+            "fetch_failed"
+        ].fillna(False)
+    ]
+
+    completed_counts = completed_burden[
+        "candidate_count"
+    ]
 
     summary = {
         "source":
@@ -543,33 +597,41 @@ def main() -> None:
             args.max_records,
         "formulas_hitting_max_records":
             capped_count,
+        "formula_fetch_failures":
+            failed_count,
         "candidate_count_mean":
             float(
-                counts.mean()
-            ),
+                completed_counts.mean()
+            )
+            if not completed_counts.empty
+            else 0.0,
         "candidate_count_median":
             float(
-                counts.median()
-            ),
+                completed_counts.median()
+            )
+            if not completed_counts.empty
+            else 0.0,
         "candidate_count_p90":
             percentile(
-                counts,
+                completed_counts,
                 0.90,
             ),
         "candidate_count_p95":
             percentile(
-                counts,
+                completed_counts,
                 0.95,
             ),
         "candidate_count_p99":
             percentile(
-                counts,
+                completed_counts,
                 0.99,
             ),
         "candidate_count_max_observed":
             int(
-                counts.max()
-            ),
+                completed_counts.max()
+            )
+            if not completed_counts.empty
+            else 0,
     }
 
     if args.source == "validation":
@@ -644,6 +706,7 @@ def main() -> None:
                     "molecular_formula",
                     "candidate_count",
                     "hit_max_records",
+                    "fetch_failed",
                 ]
             ],
             on="molecular_formula",
@@ -661,8 +724,14 @@ def main() -> None:
             ].sum()
         )
 
-        uncapped_truth = truth.loc[
+        completed_truth = truth.loc[
             ~truth[
+                "fetch_failed"
+            ].fillna(False)
+        ]
+
+        uncapped_truth = completed_truth.loc[
+            ~completed_truth[
                 "hit_max_records"
             ].fillna(False)
         ]
@@ -685,6 +754,10 @@ def main() -> None:
                         / total_truth
                         if total_truth
                         else 0.0
+                    ),
+                "validation_structures_on_completed_formulas":
+                    len(
+                        completed_truth
                     ),
                 "validation_structures_on_uncapped_formulas":
                     len(
@@ -765,6 +838,10 @@ def main() -> None:
     print(
         "Formulas hitting MaxRecords:",
         f"{capped_count:,}",
+    )
+    print(
+        "Formula fetch failures:",
+        f"{failed_count:,}",
     )
     print()
     print(
