@@ -72,6 +72,7 @@ def main() -> None:
         "spec",
         "candidate_inchikey14",
         "candidate_smiles",
+        "truth_inchikey14",
         "rank",
         "distance",
         "burden_bucket",
@@ -192,17 +193,48 @@ def main() -> None:
         )
     )
 
-    ranked = ranked.merge(
+    expected_truth = (
         truth_lookup[
             [
                 "spec",
                 "truth_inchikey14",
             ]
-        ],
-        on="spec",
-        how="left",
-        validate="many_to_one",
+        ]
+        .set_index("spec")[
+            "truth_inchikey14"
+        ]
+        .astype(str)
     )
+
+    ranked_truth = (
+        ranked["truth_inchikey14"]
+        .astype(str)
+    )
+
+    expected_ranked_truth = (
+        ranked["spec"]
+        .map(expected_truth)
+        .astype(str)
+    )
+
+    truth_mismatch = (
+        ranked_truth
+        != expected_ranked_truth
+    )
+
+    if truth_mismatch.any():
+        examples = ranked.loc[
+            truth_mismatch,
+            [
+                "spec",
+                "truth_inchikey14",
+            ],
+        ].head(20)
+
+        raise RuntimeError(
+            "Pruned MIST truth keys disagree with the benchmark sample. "
+            f"Examples:\n{examples.to_string(index=False)}"
+        )
 
     ranked.to_parquet(
         OUTPUT_PATH,
