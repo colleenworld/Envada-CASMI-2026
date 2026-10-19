@@ -260,7 +260,6 @@ def main() -> None:
         TRAIN_PATH,
         columns=[
             "inchikey14",
-            "spectrum_id",
             "precursor_mz",
             "adduct",
             "ionization_mode",
