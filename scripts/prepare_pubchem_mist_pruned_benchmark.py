@@ -25,7 +25,7 @@ FORMULA_SUMMARY_PATH = OUTPUT_DIR / "formula_union_summary.parquet"
 
 SHORTLIST_BY_BUCKET = {
     "le100": None,
-    "101to500": 250,
+    "101to500": None,
     "501to1000": 250,
     "1001to5000": 100,
 }
