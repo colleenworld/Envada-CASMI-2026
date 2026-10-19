@@ -2,7 +2,7 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from scripts.evaluate_pubchem_neighbor_pruning import (
+from casmi26.pubchem.neighbor_pruning import (
     score_candidates,
 )
 
