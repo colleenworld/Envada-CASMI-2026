@@ -16,8 +16,6 @@ def load_pubchem_candidates_for_formulas(
 
     columns = [
         "molecular_formula",
-        "pubchem_cid",
-        "full_inchikey",
         "inchikey14",
         "smiles",
     ]
