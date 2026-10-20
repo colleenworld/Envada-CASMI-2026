@@ -60,7 +60,9 @@ OUTPUT_COLUMNS = [
     "neighbor_prior_score",
     "mist_rank",
     "prior_rank",
+    "adaptive_rank",
     "ranking_method",
+    "calibrated_distance",
     "final_score",
     "rank",
 ]
@@ -363,8 +365,7 @@ def main() -> None:
 
             if total_candidates <= 100:
                 ranking_method = "mist"
-
-                within_hypothesis_score = (
+                adaptive_score = (
                     -float(
                         mist_rank
                     )
@@ -372,8 +373,7 @@ def main() -> None:
 
             else:
                 ranking_method = "rrf"
-
-                within_hypothesis_score = (
+                adaptive_score = (
                     1.0
                     / (
                         RRF_K
@@ -394,14 +394,6 @@ def main() -> None:
                 meta[
                     "selected_mass_error_ppm"
                 ]
-            )
-
-            final_score = (
-                within_hypothesis_score
-                - MASS_PENALTY
-                * abs(
-                    mass_error_ppm
-                )
             )
 
             rows.append(
@@ -445,8 +437,8 @@ def main() -> None:
                         prior_rank,
                     "ranking_method":
                         ranking_method,
-                    "final_score":
-                        final_score,
+                    "_adaptive_score":
+                        adaptive_score,
                 }
             )
 
@@ -457,6 +449,95 @@ def main() -> None:
 
     ranked = pd.DataFrame(
         rows
+    )
+
+    calibrated_parts = []
+
+    for spec, group in ranked.groupby(
+        "hypothesis_spec",
+        sort=False,
+    ):
+        group = group.copy()
+
+        method = str(
+            group[
+                "ranking_method"
+            ].iloc[0]
+        )
+
+        if method == "mist":
+            group = group.sort_values(
+                [
+                    "mist_rank",
+                    "candidate_inchikey14",
+                ],
+                ascending=[
+                    True,
+                    True,
+                ],
+            )
+        else:
+            group = group.sort_values(
+                [
+                    "_adaptive_score",
+                    "candidate_inchikey14",
+                ],
+                ascending=[
+                    False,
+                    True,
+                ],
+            )
+
+        group[
+            "adaptive_rank"
+        ] = np.arange(
+            1,
+            len(group) + 1,
+            dtype=np.int64,
+        )
+
+        #
+        # Preserve the original MIST distance distribution so the
+        # frozen mass-error penalty remains on the same scale across
+        # competing formula hypotheses. RRF changes candidate order,
+        # but does not invent a new cross-formula score scale.
+        #
+        sorted_distances = np.sort(
+            group[
+                "contrastive_distance"
+            ].to_numpy(
+                dtype=float
+            )
+        )
+
+        group[
+            "calibrated_distance"
+        ] = sorted_distances
+
+        group[
+            "final_score"
+        ] = (
+            -group[
+                "calibrated_distance"
+            ]
+            - MASS_PENALTY
+            * group[
+                "selected_mass_error_ppm"
+            ]
+            .abs()
+        )
+
+        calibrated_parts.append(
+            group
+        )
+
+    ranked = pd.concat(
+        calibrated_parts,
+        ignore_index=True,
+    ).drop(
+        columns=[
+            "_adaptive_score",
+        ]
     )
 
     ranked = (
