@@ -209,45 +209,30 @@ def main() -> None:
         mist_root,
     )
 
-    sanitize_code = (
-        "import pickle; "
-        "from rdkit import Chem, RDLogger; "
-        "RDLogger.DisableLog('rdApp.*'); "
-        f"src={str(FORM_TO_SMI_PATH)!r}; "
-        f"dst={str(SANITIZED_PATH)!r}; "
-        "data=pickle.load(open(src,'rb')); "
-        "out={}; total=kept=removed=0; "
-        "\nfor formula, entries in data.items():"
-        "\n    clean=[]"
-        "\n    seen=set()"
-        "\n    for entry in entries:"
-        "\n        total += 1"
-        "\n        mol=Chem.MolFromSmiles(str(entry['smi']))"
-        "\n        if mol is None:"
-        "\n            removed += 1"
-        "\n            continue"
-        "\n        smi=Chem.MolToSmiles(mol,isomericSmiles=False)"
-        "\n        ikey=str(entry['ikey'])"
-        "\n        key=(ikey,smi)"
-        "\n        if key in seen:"
-        "\n            continue"
-        "\n        seen.add(key)"
-        "\n        clean.append({'smi':smi,'ikey':ikey})"
-        "\n        kept += 1"
-        "\n    if clean:"
-        "\n        out[formula]=clean"
-        "\npickle.dump(out,open(dst,'wb'))"
-        "\nprint(f'Candidate SMILES total: {total:,}')"
-        "\nprint(f'Candidate SMILES kept: {kept:,}')"
-        "\nprint(f'Candidate SMILES removed: {removed:,}')"
-        "\nprint(f'Formulas retained: {len(out):,}')"
+    sanitizer = (
+        PROJECT_ROOT
+        / "scripts/sanitize_mist_candidates_resumable.py"
     )
+    sanitize_cache_dir = (
+        BENCHMARK_DIR
+        / "sanitize_cache"
+    )
+
+    if not sanitizer.exists():
+        raise FileNotFoundError(
+            f"Missing sanitizer: {sanitizer}"
+        )
 
     run(
         [
             mist_python,
-            "-c",
-            sanitize_code,
+            str(sanitizer),
+            "--input",
+            str(FORM_TO_SMI_PATH),
+            "--output",
+            str(SANITIZED_PATH),
+            "--cache-dir",
+            str(sanitize_cache_dir),
         ],
         mist_root,
     )
