@@ -63,6 +63,10 @@ fi
 
 cp -a "$MIST_ROOT/src" "$ASSET_ROOT/MIST/"
 
+# Patch the packaged MIST copy for Kaggle's current PyTorch Lightning API.
+# The local MIST checkout is left untouched.
+python scripts/patch_mist_kaggle_compat.py "$ASSET_ROOT/MIST"
+
 mkdir -p "$ASSET_ROOT/MIST/pretrained_models"
 
 cp "$MIST_ROOT/pretrained_models/mist_contrastive_canopus_pretrain.ckpt" \
