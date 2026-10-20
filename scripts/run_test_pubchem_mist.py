@@ -6,6 +6,7 @@ import os
 import pickle
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -140,9 +141,11 @@ def resolve_mist_python(
         if candidate.exists():
             return candidate
 
-    raise FileNotFoundError(
-        "Could not locate the mist-cpu Python interpreter."
-    )
+    #
+    # Kaggle runs MIST in the notebook's existing Python environment.
+    # The packaged MIST source is selected separately with --mist-root.
+    #
+    return Path(sys.executable).resolve()
 
 
 def run(
