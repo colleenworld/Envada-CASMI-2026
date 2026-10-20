@@ -41,24 +41,10 @@ def test_load_pubchem_candidates_reads_only_requested_formulas(
         index=False,
     )
 
-    columns = {
-        "molecular_formula": [],
-        "pubchem_cid": [],
-        "full_inchikey": [],
-        "inchikey14": [],
-        "smiles": [],
-    }
-
     bucket0 = pd.DataFrame(
         {
             "molecular_formula": [
                 "C2H6O",
-            ],
-            "pubchem_cid": [
-                1,
-            ],
-            "full_inchikey": [
-                "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
             ],
             "inchikey14": [
                 "LFQSCWFLJHTTHZ",
@@ -73,12 +59,6 @@ def test_load_pubchem_candidates_reads_only_requested_formulas(
         {
             "molecular_formula": [
                 "C3H8O",
-            ],
-            "pubchem_cid": [
-                2,
-            ],
-            "full_inchikey": [
-                "BDERNNFJNOPAEC-UHFFFAOYSA-N",
             ],
             "inchikey14": [
                 "BDERNNFJNOPAEC",
