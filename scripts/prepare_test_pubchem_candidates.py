@@ -60,6 +60,11 @@ STRUCTURES_PATH = (
     / "data/processed/structure_index/structures.parquet"
 )
 
+COCONUT_PATH = (
+    PROJECT_ROOT
+    / "data/external/coconut/coconut_approved.parquet"
+)
+
 OUTPUT_CANDIDATES_PATH = (
     TEST_ROOT
     / "pubchem_pruned_structure_candidates.parquet"
@@ -331,7 +336,7 @@ def main() -> None:
     # when they overlap PubChem. They are also the structural anchors
     # used by the spectral-neighbor prior.
     #
-    structures = pd.read_parquet(
+    structures_all = pd.read_parquet(
         STRUCTURES_PATH,
         columns=[
             "inchikey14",
@@ -340,8 +345,8 @@ def main() -> None:
         ],
     )
 
-    structures = structures.loc[
-        structures[
+    training = structures_all.loc[
+        structures_all[
             "molecular_formula"
         ]
         .astype(str)
@@ -350,7 +355,83 @@ def main() -> None:
         )
     ].copy()
 
-    known = structures.rename(
+    training[
+        "candidate_source"
+    ] = "training"
+
+    coconut = pd.read_parquet(
+        COCONUT_PATH,
+        columns=[
+            "inchikey14",
+            "smiles",
+            "molecular_formula",
+        ],
+    )
+
+    coconut = coconut.loc[
+        coconut[
+            "molecular_formula"
+        ]
+        .astype(str)
+        .isin(
+            formulas
+        )
+    ].copy()
+
+    overlap = training[
+        [
+            "inchikey14",
+            "molecular_formula",
+        ]
+    ].merge(
+        coconut[
+            [
+                "inchikey14",
+                "molecular_formula",
+            ]
+        ],
+        on="inchikey14",
+        how="inner",
+        suffixes=(
+            "_training",
+            "_coconut",
+        ),
+    )
+
+    conflicts = set(
+        overlap.loc[
+            overlap[
+                "molecular_formula_training"
+            ]
+            != overlap[
+                "molecular_formula_coconut"
+            ],
+            "inchikey14",
+        ].astype(str)
+    )
+
+    if conflicts:
+        training = training.loc[
+            ~training[
+                "inchikey14"
+            ]
+            .astype(str)
+            .isin(
+                conflicts
+            )
+        ].copy()
+
+        coconut = coconut.loc[
+            ~coconut[
+                "inchikey14"
+            ]
+            .astype(str)
+            .isin(
+                conflicts
+            )
+        ].copy()
+
+    known_training = training.rename(
         columns={
             "molecular_formula":
                 "candidate_formula",
@@ -364,16 +445,35 @@ def main() -> None:
             "candidate_formula",
             "candidate_inchikey14",
             "candidate_smiles",
+            "candidate_source",
         ]
     ]
 
-    known[
+    known_coconut = coconut.rename(
+        columns={
+            "molecular_formula":
+                "candidate_formula",
+            "inchikey14":
+                "candidate_inchikey14",
+            "smiles":
+                "candidate_smiles",
+        }
+    )[
+        [
+            "candidate_formula",
+            "candidate_inchikey14",
+            "candidate_smiles",
+        ]
+    ]
+
+    known_coconut[
         "candidate_source"
-    ] = "training"
+    ] = "coconut"
 
     catalog = pd.concat(
         [
-            known,
+            known_training,
+            known_coconut,
             pubchem[
                 [
                     "candidate_formula",
@@ -395,7 +495,8 @@ def main() -> None:
         .map(
             {
                 "training": 0,
-                "pubchem": 1,
+                "coconut": 1,
+                "pubchem": 2,
             }
         )
     )
@@ -543,8 +644,8 @@ def main() -> None:
         f"{len(neighbor_keys):,}",
     )
 
-    anchor_rows = structures.loc[
-        structures[
+    anchor_rows = structures_all.loc[
+        structures_all[
             "inchikey14"
         ]
         .astype(str)
