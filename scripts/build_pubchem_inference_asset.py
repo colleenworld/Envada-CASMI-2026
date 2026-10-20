@@ -213,11 +213,15 @@ def main() -> None:
         len(chunk_paths),
     )
 
-    required_candidates = {
+    asset_columns = [
         "molecular_formula",
         "inchikey14",
         "smiles",
-    }
+    ]
+
+    required_candidates = set(
+        asset_columns
+    )
 
     fragment_counts = {
         bucket: 0
@@ -247,6 +251,10 @@ def main() -> None:
 
         if frame.empty:
             continue
+
+        frame = frame[
+            asset_columns
+        ].copy()
 
         frame[
             "bucket"
@@ -367,8 +375,7 @@ def main() -> None:
                     [
                         "molecular_formula",
                         "inchikey14",
-                        "pubchem_cid",
-                        "full_inchikey",
+                        "smiles",
                     ],
                     na_position="last",
                 )
@@ -386,13 +393,7 @@ def main() -> None:
 
         else:
             part = pd.DataFrame(
-                columns=[
-                    "molecular_formula",
-                    "pubchem_cid",
-                    "full_inchikey",
-                    "inchikey14",
-                    "smiles",
-                ]
+                columns=asset_columns
             )
 
         candidate_rows += len(
@@ -477,6 +478,8 @@ def main() -> None:
             source_summary.get(
                 "formula_fetch_failures"
             ),
+        "candidate_columns":
+            asset_columns,
         "partition_method":
             "sha256-first-8-bytes-mod-bucket-count",
     }
