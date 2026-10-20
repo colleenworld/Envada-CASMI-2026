@@ -11,10 +11,9 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-SOURCE_CANDIDATES = (
+SOURCE_CHUNK_DIR = (
     PROJECT_ROOT
-    / "data/processed/diagnostics/"
-    "pubchem_formula_index_candidates.parquet"
+    / "data/processed/pubchem_bulk/chunks"
 )
 
 SOURCE_BURDEN = (
@@ -83,7 +82,6 @@ def main() -> None:
         )
 
     required = [
-        SOURCE_CANDIDATES,
         SOURCE_BURDEN,
         SOURCE_SUMMARY,
     ]
@@ -94,11 +92,21 @@ def main() -> None:
         if not path.exists()
     ]
 
+    chunk_paths = sorted(
+        SOURCE_CHUNK_DIR.glob(
+            "Compound_*.parquet"
+        )
+    )
+
+    if not chunk_paths:
+        missing.append(
+            SOURCE_CHUNK_DIR
+        )
+
     if missing:
         raise FileNotFoundError(
-            "Missing PubChem formula-index diagnostics. "
-            "Run scripts/build_pubchem_formula_candidates.py "
-            "--source formula-index first. Missing: "
+            "Missing PubChem bulk-import outputs. "
+            "Run scripts/import_pubchem_bulk_sdf.py first. Missing: "
             + ", ".join(
                 str(path)
                 for path in missing
@@ -187,12 +195,22 @@ def main() -> None:
         exist_ok=True,
     )
 
-    print(
-        "Loading PubChem formula-index candidates..."
+    temporary_dir = (
+        OUTPUT_ROOT
+        / "_bucket_fragments"
     )
 
-    candidates = pd.read_parquet(
-        SOURCE_CANDIDATES
+    temporary_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    print(
+        "Partitioning PubChem bulk chunk results..."
+    )
+    print(
+        "Source chunks:",
+        len(chunk_paths),
     )
 
     required_candidates = {
@@ -201,57 +219,184 @@ def main() -> None:
         "smiles",
     }
 
-    missing_candidates = (
-        required_candidates
-        - set(candidates.columns)
-    )
+    fragment_counts = {
+        bucket: 0
+        for bucket in range(
+            args.buckets
+        )
+    }
 
-    if missing_candidates:
-        raise ValueError(
-            "PubChem candidate file is missing columns: "
-            f"{sorted(missing_candidates)}"
+    for number, source_path in enumerate(
+        chunk_paths,
+        start=1,
+    ):
+        frame = pd.read_parquet(
+            source_path
         )
 
-    candidates[
-        "bucket"
-    ] = (
-        candidates[
-            "molecular_formula"
-        ]
-        .astype(str)
-        .map(bucket_lookup)
-    )
-
-    if candidates[
-        "bucket"
-    ].isna().any():
-        raise RuntimeError(
-            "Some candidate formulas are absent from the burden index"
+        missing_candidates = (
+            required_candidates
+            - set(frame.columns)
         )
 
-    candidates[
-        "bucket"
-    ] = candidates[
-        "bucket"
-    ].astype(int)
+        if missing_candidates:
+            raise ValueError(
+                f"{source_path} is missing candidate columns: "
+                f"{sorted(missing_candidates)}"
+            )
 
+        if frame.empty:
+            continue
+
+        frame[
+            "bucket"
+        ] = (
+            frame[
+                "molecular_formula"
+            ]
+            .astype(str)
+            .map(bucket_lookup)
+        )
+
+        if frame[
+            "bucket"
+        ].isna().any():
+            examples = (
+                frame.loc[
+                    frame[
+                        "bucket"
+                    ].isna(),
+                    "molecular_formula",
+                ]
+                .astype(str)
+                .drop_duplicates()
+                .head(20)
+                .tolist()
+            )
+
+            raise RuntimeError(
+                "Some candidate formulas are absent from the burden "
+                f"index. Examples: {examples}"
+            )
+
+        frame[
+            "bucket"
+        ] = frame[
+            "bucket"
+        ].astype(int)
+
+        for bucket, part in frame.groupby(
+            "bucket",
+            sort=False,
+        ):
+            bucket = int(
+                bucket
+            )
+
+            fragment_number = (
+                fragment_counts[
+                    bucket
+                ]
+            )
+
+            fragment_counts[
+                bucket
+            ] += 1
+
+            fragment_path = (
+                temporary_dir
+                / (
+                    f"bucket-{bucket:03d}-"
+                    f"{fragment_number:04d}.parquet"
+                )
+            )
+
+            part.drop(
+                columns=[
+                    "bucket",
+                ]
+            ).to_parquet(
+                fragment_path,
+                index=False,
+                compression="zstd",
+            )
+
+        if (
+            number % 25 == 0
+            or number == len(
+                chunk_paths
+            )
+        ):
+            print(
+                f"  partitioned "
+                f"{number}/{len(chunk_paths)} source chunks"
+            )
+
+    print()
     print(
-        "Candidate rows:",
-        f"{len(candidates):,}",
+        "Consolidating formula buckets..."
     )
+
+    candidate_rows = 0
 
     for bucket in range(
         args.buckets
     ):
-        part = candidates.loc[
-            candidates[
-                "bucket"
+        fragments = sorted(
+            temporary_dir.glob(
+                f"bucket-{bucket:03d}-*.parquet"
+            )
+        )
+
+        if fragments:
+            parts = [
+                pd.read_parquet(
+                    fragment
+                )
+                for fragment in fragments
             ]
-            == bucket
-        ].drop(
-            columns=[
-                "bucket",
-            ]
+
+            part = pd.concat(
+                parts,
+                ignore_index=True,
+            )
+
+            part = (
+                part
+                .sort_values(
+                    [
+                        "molecular_formula",
+                        "inchikey14",
+                        "pubchem_cid",
+                        "full_inchikey",
+                    ],
+                    na_position="last",
+                )
+                .drop_duplicates(
+                    subset=[
+                        "molecular_formula",
+                        "inchikey14",
+                    ],
+                    keep="first",
+                )
+                .reset_index(
+                    drop=True
+                )
+            )
+
+        else:
+            part = pd.DataFrame(
+                columns=[
+                    "molecular_formula",
+                    "pubchem_cid",
+                    "full_inchikey",
+                    "inchikey14",
+                    "smiles",
+                ]
+            )
+
+        candidate_rows += len(
+            part
         )
 
         path = (
@@ -265,6 +410,9 @@ def main() -> None:
             compression="zstd",
         )
 
+        for fragment in fragments:
+            fragment.unlink()
+
         if (
             bucket % 16 == 0
             or bucket
@@ -272,8 +420,14 @@ def main() -> None:
         ):
             print(
                 f"  wrote bucket "
-                f"{bucket + 1}/{args.buckets}"
+                f"{bucket + 1}/{args.buckets} "
+                f"| total unique rows "
+                f"{candidate_rows:,}"
             )
+
+    shutil.rmtree(
+        temporary_dir
+    )
 
     burden.to_parquet(
         BURDEN_PATH,
@@ -302,13 +456,14 @@ def main() -> None:
             ),
         "candidate_rows":
             int(
-                len(candidates)
+                candidate_rows
             ),
         "unique_candidate_structures":
             int(
-                candidates[
-                    "inchikey14"
-                ].nunique()
+                source_summary.get(
+                    "unique_candidate_structures",
+                    candidate_rows,
+                )
             ),
         "source_max_records":
             source_summary.get(
