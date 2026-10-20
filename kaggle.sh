@@ -1,61 +1,84 @@
-mkdir -p kaggle/casmi26-inference-assets/project
-#mkdir -p kaggle/casmi26-inference-assets/MIST
+#!/usr/bin/env bash
+set -euo pipefail
 
-cd /home/colleen/PycharmProjects/Envada-CASMI-2026
+PROJECT_ROOT="${CASMI26_PROJECT_ROOT:-/home/colleen/PycharmProjects/Envada-CASMI-2026}"
+MIST_ROOT="${MIST_ROOT:-/home/colleen/PycharmProjects/MIST}"
+ASSET_ROOT="$PROJECT_ROOT/kaggle/casmi26-inference-assets"
 
-cp -a scripts kaggle/casmi26-inference-assets/project/
-cp -a src kaggle/casmi26-inference-assets/project/
+cd "$PROJECT_ROOT"
 
-mkdir -p kaggle/casmi26-inference-assets/project/data/processed
+rm -rf "$ASSET_ROOT/project" "$ASSET_ROOT/MIST"
+
+mkdir -p "$ASSET_ROOT/project"
+mkdir -p "$ASSET_ROOT/MIST"
+
+cp -a scripts "$ASSET_ROOT/project/"
+cp -a src "$ASSET_ROOT/project/"
+
+mkdir -p "$ASSET_ROOT/project/data/processed"
+
+for required_dir in \
+  data/processed/formula_index \
+  data/processed/structure_index \
+  data/processed/retrieval_index \
+  data/processed/pubchem_formula_index
+do
+  if [ ! -d "$required_dir" ]; then
+    echo "Missing $required_dir" >&2
+    exit 1
+  fi
+done
+
 cp -a data/processed/formula_index \
-      kaggle/casmi26-inference-assets/project/data/processed/
+      "$ASSET_ROOT/project/data/processed/"
 
 cp -a data/processed/structure_index \
-      kaggle/casmi26-inference-assets/project/data/processed/
+      "$ASSET_ROOT/project/data/processed/"
 
 cp -a data/processed/retrieval_index \
-      kaggle/casmi26-inference-assets/project/data/processed/
+      "$ASSET_ROOT/project/data/processed/"
 
-if [ ! -d data/processed/pubchem_formula_index ]; then
-  echo "Missing data/processed/pubchem_formula_index"
-  echo "Run:"
-  echo "  python scripts/build_pubchem_formula_candidates.py --source formula-index"
-  echo "  python scripts/build_pubchem_inference_asset.py"
+cp -a data/processed/pubchem_formula_index \
+      "$ASSET_ROOT/project/data/processed/"
+
+mkdir -p "$ASSET_ROOT/project/data/external"
+
+if [ ! -d data/external/coconut ]; then
+  echo "Missing data/external/coconut" >&2
   exit 1
 fi
 
-cp -a data/processed/pubchem_formula_index \
-      kaggle/casmi26-inference-assets/project/data/processed/
-
-mkdir -p kaggle/casmi26-inference-assets/project/data/external
-
 cp -a data/external/coconut \
-      kaggle/casmi26-inference-assets/project/data/external/
+      "$ASSET_ROOT/project/data/external/"
 
-#cp -a /home/colleen/PycharmProjects/MIST/src kaggle/casmi26-inference-assets/MIST/
+if [ ! -d "$MIST_ROOT/src" ]; then
+  echo "Missing MIST source: $MIST_ROOT/src" >&2
+  exit 1
+fi
 
-#mkdir -p kaggle/casmi26-inference-assets/MIST/pretrained_models
+if [ ! -f "$MIST_ROOT/pretrained_models/mist_contrastive_canopus_pretrain.ckpt" ]; then
+  echo "Missing MIST checkpoint" >&2
+  exit 1
+fi
 
-#cp /home/colleen/PycharmProjects/MIST/pretrained_models/mist_contrastive_canopus_pretrain.ckpt \
-#   kaggle/casmi26-inference-assets/MIST/pretrained_models/
+cp -a "$MIST_ROOT/src" "$ASSET_ROOT/MIST/"
 
-#mkdir -p kaggle/casmi26-inference-assets/wheelhouse
+mkdir -p "$ASSET_ROOT/MIST/pretrained_models"
 
-#cd kaggle/casmi26-inference-assets/wheelhouse
+cp "$MIST_ROOT/pretrained_models/mist_contrastive_canopus_pretrain.ckpt" \
+   "$ASSET_ROOT/MIST/pretrained_models/"
 
-#python -m pip download \
-#  --only-binary=:all: \
-#  --platform manylinux_2_28_x86_64 \
-#  --python-version 313 \
-#  --implementation cp \
-#  --abi cp313 \
-#  --no-deps \
-#  rdkit==2026.9.1
+echo
+echo "Packaged asset sizes:"
+du -sh "$ASSET_ROOT/project/data/processed/pubchem_formula_index"
+du -sh "$ASSET_ROOT/project/data/processed/retrieval_index"
+du -sh "$ASSET_ROOT/MIST"
 
-#cd ../../../
+echo
+echo "Uploading Kaggle dataset version..."
 
 kaggle datasets version \
-  -m "update" \
-  -p kaggle/casmi26-inference-assets \
+  -m "PubChem-pruned inference assets" \
+  -p "$ASSET_ROOT" \
   -t \
   -r zip
