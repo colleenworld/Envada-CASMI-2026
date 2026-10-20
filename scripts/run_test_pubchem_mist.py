@@ -307,6 +307,28 @@ def main() -> None:
         )
     ].copy()
 
+    #
+    # MIST's ion vocabulary uses the explicit ammonia composition
+    # for ammonium adducts. Keep our project-facing adduct label
+    # unchanged everywhere else, but translate it in the labels
+    # passed into MIST.
+    #
+    mist_ionization_map = {
+        "[M+NH4]+": "[M+H3N+H]+",
+    }
+
+    filtered_labels[
+        "ionization"
+    ] = (
+        filtered_labels[
+            "ionization"
+        ]
+        .astype(str)
+        .replace(
+            mist_ionization_map
+        )
+    )
+
     label_specs = set(
         filtered_labels[
             "spec"
