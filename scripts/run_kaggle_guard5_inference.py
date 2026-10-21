@@ -36,6 +36,16 @@ def parse_args():
         type=Path,
         required=True,
     )
+    parser.add_argument(
+        "--hdf-formulas-per-batch",
+        type=int,
+        default=8,
+    )
+    parser.add_argument(
+        "--hdf-workers",
+        type=int,
+        default=2,
+    )
 
     return parser.parse_args()
 
@@ -221,9 +231,13 @@ def main() -> None:
             "--mist-python",
             python,
             "--hdf-formulas-per-batch",
-            "8",
+            str(
+                args.hdf_formulas_per_batch
+            ),
             "--hdf-workers",
-            "2",
+            str(
+                args.hdf_workers
+            ),
         ],
         [
             python,
