@@ -59,6 +59,18 @@ def parse_args():
         default=500,
     )
 
+    parser.add_argument(
+        "--hdf-formulas-per-batch",
+        type=int,
+        default=8,
+    )
+
+    parser.add_argument(
+        "--hdf-workers",
+        type=int,
+        default=2,
+    )
+
     return parser.parse_args()
 
 
@@ -240,9 +252,17 @@ def main() -> None:
     build_hdf = (
         "import pickle,sys; "
         f"sys.path.insert(0,{str(mist_root / 'src')!r}); "
-        "from mist.retrieval_lib.make_hdf5 import make_retrieval_hdf5; "
+        "import mist.retrieval_lib.make_hdf5 as mh; "
+        "from mist import utils; "
+        f"mh.CHUNKSIZE={args.hdf_formulas_per_batch!r}; "
+        "_orig=utils.chunked_parallel; "
+        f"_workers={args.hdf_workers!r}; "
+        "def _limited(items, fn, *a, **kw): "
+        "    kw['max_cpu']=_workers; "
+        "    return _orig(items, fn, *a, **kw); "
+        "utils.chunked_parallel=_limited; "
         f"m=pickle.load(open({str(SANITIZED_PATH)!r},'rb')); "
-        "make_retrieval_hdf5("
+        "mh.make_retrieval_hdf5("
         f"labels_file={str(LABELS_PATH)!r},"
         "form_to_smi=m,"
         f"output_dir={str(HDF_DIR)!r},"
