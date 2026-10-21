@@ -18,6 +18,7 @@ from casmi26.spectra.binning import bin_spectrum
 
 SEED = 42
 SPECTRAL_NEIGHBORS = 25
+SAVE_TOP_K = 500
 BATCH_STRUCTURES = 16
 MAX_MZ = 1500.0
 BIN_WIDTH = 1.0
@@ -177,6 +178,10 @@ def main() -> None:
     ranking_path = (
         output_dir
         / "neighbor_prior_truth_ranks.parquet"
+    )
+    candidate_ranking_path = (
+        output_dir
+        / "neighbor_prior_top500.parquet"
     )
 
     for required in [
@@ -739,6 +744,7 @@ def main() -> None:
     }
 
     result_rows = []
+    candidate_ranking_rows = []
     processed = 0
 
     for bucket in sorted(
@@ -902,6 +908,54 @@ def main() -> None:
                     ]
                 )
 
+                top_count = min(
+                    SAVE_TOP_K,
+                    len(order),
+                )
+
+                for prior_rank, candidate_index in enumerate(
+                    order[:top_count],
+                    start=1,
+                ):
+                    candidate_ranking_rows.append(
+                        {
+                            "benchmark_id":
+                                int(
+                                    query.benchmark_id
+                                ),
+                            "inchikey14":
+                                str(
+                                    query.inchikey14
+                                ),
+                            "candidate_inchikey14":
+                                str(
+                                    valid_keys_array[
+                                        candidate_index
+                                    ]
+                                ),
+                            "prior_rank":
+                                prior_rank,
+                            "neighbor_prior_score":
+                                float(
+                                    scores[
+                                        candidate_index
+                                    ]
+                                ),
+                            "burden_bucket":
+                                str(
+                                    query.burden_bucket
+                                ),
+                            "dominant_library":
+                                str(
+                                    query.dominant_library
+                                ),
+                            "candidate_count":
+                                len(
+                                    valid_keys_array
+                                ),
+                        }
+                    )
+
                 truth_positions = np.flatnonzero(
                     ordered_keys
                     == str(
@@ -984,6 +1038,15 @@ def main() -> None:
 
     results.to_parquet(
         ranking_path,
+        index=False,
+    )
+
+    candidate_rankings = pd.DataFrame(
+        candidate_ranking_rows
+    )
+
+    candidate_rankings.to_parquet(
+        candidate_ranking_path,
         index=False,
     )
 
@@ -1163,6 +1226,9 @@ def main() -> None:
     )
     print(
         ranking_path
+    )
+    print(
+        candidate_ranking_path
     )
     print(
         output_dir
