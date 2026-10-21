@@ -249,35 +249,38 @@ def main() -> None:
         mist_root,
     )
 
-    build_hdf = (
-        "import pickle,sys; "
-        f"sys.path.insert(0,{str(mist_root / 'src')!r}); "
-        "import mist.retrieval_lib.make_hdf5 as mh; "
-        "from mist import utils; "
-        f"mh.CHUNKSIZE={args.hdf_formulas_per_batch!r}; "
-        "_orig=utils.chunked_parallel; "
-        f"_workers={args.hdf_workers!r}; "
-        "def _limited(items, fn, *a, **kw): "
-        "    kw['max_cpu']=_workers; "
-        "    return _orig(items, fn, *a, **kw); "
-        "utils.chunked_parallel=_limited; "
-        f"m=pickle.load(open({str(SANITIZED_PATH)!r},'rb')); "
-        "mh.make_retrieval_hdf5("
-        f"labels_file={str(LABELS_PATH)!r},"
-        "form_to_smi=m,"
-        f"output_dir={str(HDF_DIR)!r},"
-        f"database_name={DATABASE_NAME!r},"
-        "fp_names=['morgan4096'])"
+    hdf_builder = (
+        PROJECT_ROOT
+        / "scripts/build_mist_hdf_bounded.py"
     )
+
+    if not hdf_builder.exists():
+        raise FileNotFoundError(
+            f"Missing HDF builder: {hdf_builder}"
+        )
 
     run(
         [
             mist_python,
-            "-c",
-            build_hdf,
+            str(hdf_builder),
+            "--mist-root",
+            str(mist_root),
+            "--labels-file",
+            str(LABELS_PATH),
+            "--form-to-smi",
+            str(SANITIZED_PATH),
+            "--output-dir",
+            str(HDF_DIR),
+            "--database-name",
+            DATABASE_NAME,
+            "--formulas-per-batch",
+            str(args.hdf_formulas_per_batch),
+            "--workers",
+            str(args.hdf_workers),
         ],
         mist_root,
     )
+
 
     hdf_files = sorted(
         HDF_DIR.glob(
