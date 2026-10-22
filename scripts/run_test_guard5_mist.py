@@ -164,6 +164,7 @@ def run(
     command: list[str],
     *,
     cwd: Path,
+    env: dict[str, str] | None = None,
 ) -> None:
     print()
     print(
@@ -174,6 +175,7 @@ def run(
     subprocess.run(
         command,
         cwd=cwd,
+        env=env,
         check=True,
     )
 
@@ -242,6 +244,28 @@ def main() -> None:
             args.mist_python
         )
     )
+
+    mist_env = os.environ.copy()
+
+    mist_pythonpath = str(
+        mist_root
+        / "src"
+    )
+
+    existing_pythonpath = mist_env.get(
+        "PYTHONPATH"
+    )
+
+    if existing_pythonpath:
+        mist_pythonpath = (
+            mist_pythonpath
+            + os.pathsep
+            + existing_pythonpath
+        )
+
+    mist_env[
+        "PYTHONPATH"
+    ] = mist_pythonpath
 
     assign_script = (
         mist_root
@@ -407,6 +431,7 @@ def main() -> None:
             "0",
         ],
         cwd=mist_root,
+        env=mist_env,
     )
 
     print()
@@ -436,6 +461,7 @@ def main() -> None:
             str(sanitize_cache_dir),
         ],
         cwd=mist_root,
+        env=mist_env,
     )
 
     hdf_builder = (
@@ -463,6 +489,7 @@ def main() -> None:
             str(args.hdf_workers),
         ],
         cwd=mist_root,
+        env=mist_env,
     )
 
     hdf_files = sorted(
@@ -503,6 +530,7 @@ def main() -> None:
             str(args.top_k),
         ],
         cwd=mist_root,
+        env=mist_env,
     )
 
     predictions = sorted(
