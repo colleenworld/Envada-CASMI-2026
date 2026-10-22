@@ -37,11 +37,15 @@ def parse_args():
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
+RDKIT_SUPPRESSION_IMPORT = "from rdkit import RDLogger"
+RDKIT_SUPPRESSION_CALL = 'RDLogger.DisableLog("rdApp.*")'
 
+
+def patch_lightning(
+    mist_root: Path,
+) -> None:
     misc_utils = (
-        args.mist_root
+        mist_root
         / "src/mist/utils/misc_utils.py"
     )
 
@@ -65,20 +69,91 @@ def main() -> None:
             f"{misc_utils}. Refusing to patch an unknown MIST source."
         )
 
-    patched = text.replace(
-        OLD_IMPORT,
-        NEW_IMPORT,
-        1,
-    )
-
     misc_utils.write_text(
-        patched
+        text.replace(
+            OLD_IMPORT,
+            NEW_IMPORT,
+            1,
+        )
     )
 
     print(
         "Patched MIST Lightning logger compatibility:",
         misc_utils,
     )
+
+
+def patch_rdkit_logging(
+    path: Path,
+) -> None:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"MIST RDKit module not found: {path}"
+        )
+
+    text = path.read_text()
+
+    if (
+        RDKIT_SUPPRESSION_IMPORT in text
+        and RDKIT_SUPPRESSION_CALL in text
+    ):
+        print(
+            "MIST RDKit logging suppression already present:",
+            path,
+        )
+        return
+
+    lines = text.splitlines()
+
+    insert_at = 0
+
+    if lines and lines[0].startswith('"""'):
+        if lines[0].count('"""') >= 2:
+            insert_at = 1
+        else:
+            for index in range(1, len(lines)):
+                if '"""' in lines[index]:
+                    insert_at = index + 1
+                    break
+
+    suppression = [
+        "",
+        "from rdkit import RDLogger",
+        "",
+        'RDLogger.DisableLog("rdApp.*")',
+        "",
+    ]
+
+    lines[
+        insert_at:insert_at
+    ] = suppression
+
+    path.write_text(
+        "\n".join(lines)
+        + "\n"
+    )
+
+    print(
+        "Patched MIST RDKit logging suppression:",
+        path,
+    )
+
+
+def main() -> None:
+    args = parse_args()
+
+    patch_lightning(
+        args.mist_root
+    )
+
+    for relative_path in [
+        "src/mist/data/featurizers.py",
+        "src/mist/utils/chem_utils.py",
+    ]:
+        patch_rdkit_logging(
+            args.mist_root
+            / relative_path
+        )
 
 
 if __name__ == "__main__":
