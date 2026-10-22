@@ -208,6 +208,63 @@ def main() -> None:
         "PYTHONPATH"
     ] = pythonpath
 
+    #
+    # Kaggle inference assets include an offline wheelhouse. The guard-5
+    # candidate stage requires RDKit, which is not guaranteed to be in
+    # the base runtime. Install packaged wheels before running stages.
+    #
+    wheelhouse = (
+        mist_root.parent
+        / "wheelhouse"
+    )
+
+    if wheelhouse.exists():
+        wheels = sorted(
+            wheelhouse.glob(
+                "*.whl"
+            )
+        )
+
+        if wheels:
+            run(
+                [
+                    python,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--no-index",
+                    "--find-links",
+                    str(
+                        wheelhouse
+                    ),
+                    *[
+                        str(
+                            wheel
+                        )
+                        for wheel in wheels
+                    ],
+                ],
+                cwd=project_root,
+                env=env,
+            )
+
+    try:
+        subprocess.run(
+            [
+                python,
+                "-c",
+                "import rdkit; print('RDKit:', rdkit.__version__)",
+            ],
+            cwd=project_root,
+            env=env,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "RDKit is required for guard-5 inference and was not "
+            "available after offline wheelhouse setup."
+        ) from exc
+
     stages = [
         [
             python,
