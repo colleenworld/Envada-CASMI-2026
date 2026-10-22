@@ -7,10 +7,11 @@ ASSET_ROOT="$PROJECT_ROOT/kaggle/casmi26-inference-assets"
 
 cd "$PROJECT_ROOT"
 
-rm -rf "$ASSET_ROOT/project" "$ASSET_ROOT/MIST"
+rm -rf "$ASSET_ROOT/project" "$ASSET_ROOT/MIST" "$ASSET_ROOT/wheelhouse"
 
 mkdir -p "$ASSET_ROOT/project"
 mkdir -p "$ASSET_ROOT/MIST"
+mkdir -p "$ASSET_ROOT/wheelhouse"
 
 cp -a scripts "$ASSET_ROOT/project/"
 cp -a src "$ASSET_ROOT/project/"
@@ -73,10 +74,31 @@ cp "$MIST_ROOT/pretrained_models/mist_contrastive_canopus_pretrain.ckpt" \
    "$ASSET_ROOT/MIST/pretrained_models/"
 
 echo
+echo "Downloading Kaggle CPython 3.13 RDKit wheel..."
+
+uvx --from pip pip download \
+  "rdkit==2026.9.1" \
+  --only-binary=:all: \
+  --platform manylinux_2_28_x86_64 \
+  --python-version 313 \
+  --implementation cp \
+  --abi cp313 \
+  --no-deps \
+  --dest "$ASSET_ROOT/wheelhouse"
+
+RDKIT_WHEEL_COUNT="$(find "$ASSET_ROOT/wheelhouse" -maxdepth 1 -type f -name 'rdkit-*-cp313-*.whl' | wc -l)"
+
+if [ "$RDKIT_WHEEL_COUNT" -ne 1 ]; then
+  echo "Expected exactly one CPython 3.13 RDKit wheel; found $RDKIT_WHEEL_COUNT" >&2
+  exit 1
+fi
+
+echo
 echo "Packaged asset sizes:"
 du -sh "$ASSET_ROOT/project/data/processed/pubchem_formula_index"
 du -sh "$ASSET_ROOT/project/data/processed/retrieval_index"
 du -sh "$ASSET_ROOT/MIST"
+du -sh "$ASSET_ROOT/wheelhouse"
 
 echo
 echo "Uploading Kaggle dataset version..."
