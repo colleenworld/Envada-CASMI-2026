@@ -39,7 +39,7 @@ def output_dir_for(top_k: int) -> Path:
     return BENCHMARK_DIR / f"learned_ranker_top{top_k}"
 
 
-FEATURE_COLUMNS = [
+BASE_FEATURE_COLUMNS = [
     "formula_rank",
     "mass_error_best_abs_ppm",
     "formula_support_count",
@@ -56,6 +56,20 @@ FEATURE_COLUMNS = [
     "log_formula_candidate_count",
     "inverse_prior_rank",
     "inverse_formula_rank",
+]
+
+OPTIONAL_NEIGHBOR_FEATURE_COLUMNS = [
+    "neighbor_tanimoto_max",
+    "neighbor_tanimoto_mean",
+    "neighbor_tanimoto_top3_mean",
+    "neighbor_tanimoto_top5_mean",
+    "neighbor_weighted_mean",
+    "neighbor_weighted_top3_mean",
+    "neighbor_count_ge_03",
+    "neighbor_count_ge_05",
+    "neighbor_count_ge_07",
+    "best_structural_neighbor_spectral_score",
+    "neighbor_feature_count",
 ]
 
 
@@ -129,6 +143,7 @@ def summarize(
 
 def prepare_ranker_frame(
     frame: pd.DataFrame,
+    feature_columns: list[str],
 ) -> tuple[
     pd.DataFrame,
     np.ndarray,
@@ -161,7 +176,7 @@ def prepare_ranker_frame(
 
     x = (
         ordered[
-            FEATURE_COLUMNS
+            feature_columns
         ]
         .copy()
     )
@@ -384,13 +399,28 @@ def main() -> None:
         features_path
     )
 
+    feature_columns = [
+        *BASE_FEATURE_COLUMNS,
+        *[
+            column
+            for column
+            in OPTIONAL_NEIGHBOR_FEATURE_COLUMNS
+            if column in frame.columns
+        ],
+    ]
+
+    print(
+        "Using features:",
+        len(feature_columns),
+    )
+
     required = {
         "inchikey14",
         "candidate_inchikey14",
         "is_truth",
         "split",
         "truth_present",
-        *FEATURE_COLUMNS,
+        *BASE_FEATURE_COLUMNS,
     }
 
     missing = (
@@ -497,7 +527,8 @@ def main() -> None:
         fit_x,
         fit_groups,
     ) = prepare_ranker_frame(
-        fit_frame
+        fit_frame,
+        feature_columns,
     )
 
     (
@@ -505,7 +536,8 @@ def main() -> None:
         validation_x,
         validation_groups,
     ) = prepare_ranker_frame(
-        validation_frame
+        validation_frame,
+        feature_columns,
     )
 
     (
@@ -513,7 +545,8 @@ def main() -> None:
         holdout_x,
         _,
     ) = prepare_ranker_frame(
-        holdout_frame
+        holdout_frame,
+        feature_columns,
     )
 
     fit_y = (
@@ -585,7 +618,7 @@ def main() -> None:
                 50
             ),
         ],
-        feature_name=FEATURE_COLUMNS,
+        feature_name=feature_columns,
     )
 
     booster = model.booster_
@@ -787,7 +820,7 @@ def main() -> None:
     importance = pd.DataFrame(
         {
             "feature":
-                FEATURE_COLUMNS,
+                feature_columns,
             "gain":
                 booster.feature_importance(
                     importance_type="gain"
