@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -15,11 +16,6 @@ BENCHMARK_DIR = (
     / "true_formula_neighbor_benchmark"
 )
 
-CANDIDATES_PATH = (
-    BENCHMARK_DIR
-    / "top3_neighbor_collapse"
-    / "top3_neighbor_top100.parquet"
-)
 
 HYPOTHESES_PATH = (
     ROOT
@@ -34,28 +30,59 @@ APPROVED_COCONUT_PATH = Path(
     "data/external/coconut/coconut_approved.parquet"
 )
 
-OUTPUT_DIR = (
-    BENCHMARK_DIR
-    / "learned_ranker"
-)
-
-OUTPUT_PATH = (
-    OUTPUT_DIR
-    / "candidate_features.parquet"
-)
-
-QUERY_SPLIT_PATH = (
-    OUTPUT_DIR
-    / "query_split.parquet"
-)
 
 SEED = 42
 HOLDOUT_FRACTION = 0.20
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--candidate-top-k",
+        type=int,
+        default=100,
+        help="Per-formula neighbor candidate retention used by the source artifact.",
+    )
+    args = parser.parse_args()
+
+    if args.candidate_top_k <= 0:
+        parser.error("--candidate-top-k must be positive")
+
+    return args
+
+
+def output_dir_for(top_k: int) -> Path:
+    if top_k == 100:
+        return BENCHMARK_DIR / "learned_ranker"
+
+    return BENCHMARK_DIR / f"learned_ranker_top{top_k}"
+
+
 def main() -> None:
+    args = parse_args()
+
+    candidates_path = (
+        BENCHMARK_DIR
+        / "top3_neighbor_collapse"
+        / f"top3_neighbor_top{args.candidate_top_k}.parquet"
+    )
+
+    output_dir = output_dir_for(
+        args.candidate_top_k
+    )
+
+    output_path = (
+        output_dir
+        / "candidate_features.parquet"
+    )
+
+    query_split_path = (
+        output_dir
+        / "query_split.parquet"
+    )
+
     for path in [
-        CANDIDATES_PATH,
+        candidates_path,
         HYPOTHESES_PATH,
         FULL_COCONUT_PATH,
         APPROVED_COCONUT_PATH,
@@ -65,13 +92,13 @@ def main() -> None:
                 f"Missing required artifact: {path}"
             )
 
-    OUTPUT_DIR.mkdir(
+    output_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
 
     candidates = pd.read_parquet(
-        CANDIDATES_PATH
+        candidates_path
     )
 
     hypotheses = pd.read_parquet(
@@ -512,13 +539,13 @@ def main() -> None:
     )
 
     features.to_parquet(
-        OUTPUT_PATH,
+        output_path,
         index=False,
         compression="zstd",
     )
 
     query_split.to_parquet(
-        QUERY_SPLIT_PATH,
+        query_split_path,
         index=False,
         compression="zstd",
     )
@@ -590,11 +617,11 @@ def main() -> None:
     print()
     print(
         "Wrote:",
-        OUTPUT_PATH,
+        output_path,
     )
     print(
         "Wrote:",
-        QUERY_SPLIT_PATH,
+        query_split_path,
     )
 
 
