@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import lightgbm as lgb
@@ -7,32 +8,36 @@ import numpy as np
 import pandas as pd
 
 
-ROOT = Path(
+BENCHMARK_DIR = Path(
     "data/processed/diagnostics/large_validation_audit/"
-    "true_formula_neighbor_benchmark/learned_ranker"
-)
-
-FEATURES_PATH = (
-    ROOT
-    / "candidate_features.parquet"
-)
-
-MODEL_PATH = (
-    ROOT
-    / "lgbm_ranker.txt"
-)
-
-PREDICTIONS_PATH = (
-    ROOT
-    / "holdout_predictions.parquet"
-)
-
-SUMMARY_PATH = (
-    ROOT
-    / "holdout_summary.csv"
+    "true_formula_neighbor_benchmark"
 )
 
 SEED = 42
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--candidate-top-k",
+        type=int,
+        default=100,
+        help="Candidate depth used to build the learned-ranker dataset.",
+    )
+    args = parser.parse_args()
+
+    if args.candidate_top_k <= 0:
+        parser.error("--candidate-top-k must be positive")
+
+    return args
+
+
+def output_dir_for(top_k: int) -> Path:
+    if top_k == 100:
+        return BENCHMARK_DIR / "learned_ranker"
+
+    return BENCHMARK_DIR / f"learned_ranker_top{top_k}"
+
 
 FEATURE_COLUMNS = [
     "formula_rank",
@@ -346,14 +351,37 @@ def rank_penalty_3(
 
 
 def main() -> None:
-    if not FEATURES_PATH.exists():
+    args = parse_args()
+
+    root = output_dir_for(
+        args.candidate_top_k
+    )
+
+    features_path = (
+        root
+        / "candidate_features.parquet"
+    )
+    model_path = (
+        root
+        / "lgbm_ranker.txt"
+    )
+    predictions_path = (
+        root
+        / "holdout_predictions.parquet"
+    )
+    summary_path = (
+        root
+        / "holdout_summary.csv"
+    )
+
+    if not features_path.exists():
         raise FileNotFoundError(
             "Missing learned-ranker dataset. Run "
             "scripts/build_learned_ranker_dataset.py first."
         )
 
     frame = pd.read_parquet(
-        FEATURES_PATH
+        features_path
     )
 
     required = {
@@ -569,7 +597,7 @@ def main() -> None:
 
     booster.save_model(
         str(
-            MODEL_PATH
+            model_path
         )
     )
 
@@ -641,7 +669,7 @@ def main() -> None:
     ] = baseline_ranks.to_numpy()
 
     results.to_parquet(
-        PREDICTIONS_PATH,
+        predictions_path,
         index=False,
         compression="zstd",
     )
@@ -695,7 +723,7 @@ def main() -> None:
     )
 
     summary.to_csv(
-        SUMMARY_PATH,
+        summary_path,
         index=False,
     )
 
@@ -789,15 +817,15 @@ def main() -> None:
     print()
     print(
         "Wrote:",
-        MODEL_PATH,
+        model_path,
     )
     print(
         "Wrote:",
-        PREDICTIONS_PATH,
+        predictions_path,
     )
     print(
         "Wrote:",
-        SUMMARY_PATH,
+        summary_path,
     )
 
 
