@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 
@@ -18,13 +19,29 @@ from casmi26.spectra.binning import bin_spectrum
 
 SPECTRAL_NEIGHBORS = 25
 BATCH_STRUCTURES = 16
-SAVE_TOP_K_PER_FORMULA = 100
+DEFAULT_SAVE_TOP_K_PER_FORMULA = 100
 MAX_MZ = 1500.0
 BIN_WIDTH = 1.0
 
 FORMULA_PENALTIES = [1, 3, 5, 10, 25, 50]
 
 RDLogger.DisableLog("rdApp.*")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--save-top-k",
+        type=int,
+        default=DEFAULT_SAVE_TOP_K_PER_FORMULA,
+        help="Candidates retained per formula after neighbor-prior ranking.",
+    )
+    args = parser.parse_args()
+
+    if args.save_top_k <= 0:
+        parser.error("--save-top-k must be positive")
+
+    return args
 
 
 def morgan_fp(smiles: str):
@@ -251,6 +268,8 @@ def collapse(
 
 
 def main() -> None:
+    args = parse_args()
+
     project_root = Path(
         os.environ.get(
             "CASMI26_PROJECT_ROOT",
@@ -310,17 +329,17 @@ def main() -> None:
 
     candidate_path = (
         output_dir
-        / "top3_neighbor_top100.parquet"
+        / f"top3_neighbor_top{args.save_top_k}.parquet"
     )
 
     summary_path = (
         output_dir
-        / "collapse_summary.csv"
+        / f"collapse_summary_top{args.save_top_k}.csv"
     )
 
     truth_path = (
         output_dir
-        / "truth_ranks.parquet"
+        / f"truth_ranks_top{args.save_top_k}.parquet"
     )
 
     required = [
@@ -1045,7 +1064,7 @@ def main() -> None:
                 )
 
                 top_count = min(
-                    SAVE_TOP_K_PER_FORMULA,
+                    args.save_top_k,
                     len(
                         order
                     ),
@@ -1298,7 +1317,7 @@ def main() -> None:
     )
     print(
         "Per-formula candidates retained:",
-        SAVE_TOP_K_PER_FORMULA,
+        args.save_top_k,
     )
     print()
     print(
