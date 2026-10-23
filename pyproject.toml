@@ -1,0 +1,26 @@
+[project]
+name = "envada-casmi-2026"
+version = "0.1.0"
+description = "Molecule identification from mass spectra for the Enveda CASMI 2026 competition"
+readme = "README.md"
+authors = [
+    { name = "colleen", email = "colleeen.davis.world@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "pyarrow>=25.0.1",
+    "pytorch-lightning>=1.8.6",
+    "rdkit>=2026.3.6",
+    "scikit-learn>=1.9.1",
+    "scipy",
+    "scipy-stubs~=1.18.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "casmi26"
