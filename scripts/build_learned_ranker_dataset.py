@@ -34,6 +34,20 @@ APPROVED_COCONUT_PATH = Path(
 SEED = 42
 HOLDOUT_FRACTION = 0.20
 
+NEIGHBOR_ENRICHMENT_COLUMNS = [
+    "neighbor_tanimoto_max",
+    "neighbor_tanimoto_mean",
+    "neighbor_tanimoto_top3_mean",
+    "neighbor_tanimoto_top5_mean",
+    "neighbor_weighted_mean",
+    "neighbor_weighted_top3_mean",
+    "neighbor_count_ge_03",
+    "neighbor_count_ge_05",
+    "neighbor_count_ge_07",
+    "best_structural_neighbor_spectral_score",
+    "neighbor_feature_count",
+]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -255,6 +269,68 @@ def main() -> None:
         how="left",
         validate="many_to_one",
     )
+
+    if args.candidate_top_k >= 500:
+        enrichment_path = (
+            output_dir
+            / "neighbor_enrichment.parquet"
+        )
+
+        if not enrichment_path.exists():
+            raise FileNotFoundError(
+                "Missing top-500 neighbor enrichment. Run "
+                "scripts/enrich_top500_neighbor_features.py first: "
+                f"{enrichment_path}"
+            )
+
+        enrichment = pd.read_parquet(
+            enrichment_path
+        )
+
+        required_enrichment = {
+            "inchikey14",
+            "candidate_formula",
+            "candidate_inchikey14",
+            *NEIGHBOR_ENRICHMENT_COLUMNS,
+        }
+
+        missing_enrichment = (
+            required_enrichment
+            - set(
+                enrichment.columns
+            )
+        )
+
+        if missing_enrichment:
+            raise ValueError(
+                "Neighbor enrichment is missing columns: "
+                f"{sorted(missing_enrichment)}"
+            )
+
+        features = features.merge(
+            enrichment[
+                [
+                    "inchikey14",
+                    "candidate_formula",
+                    "candidate_inchikey14",
+                    *NEIGHBOR_ENRICHMENT_COLUMNS,
+                ]
+            ],
+            on=[
+                "inchikey14",
+                "candidate_formula",
+                "candidate_inchikey14",
+            ],
+            how="left",
+            validate="one_to_one",
+        )
+
+        if features[
+            NEIGHBOR_ENRICHMENT_COLUMNS
+        ].isna().all(axis=None):
+            raise RuntimeError(
+                "Neighbor enrichment merge produced no usable values"
+            )
 
     if features[
         "formula_support_count"
