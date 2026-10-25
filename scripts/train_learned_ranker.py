@@ -24,6 +24,11 @@ def parse_args() -> argparse.Namespace:
         default=100,
         help="Candidate depth used to build the learned-ranker dataset.",
     )
+    parser.add_argument(
+        "--experiment-name",
+        default=None,
+        help="Optional learned-ranker directory suffix.",
+    )
     args = parser.parse_args()
 
     if args.candidate_top_k <= 0:
@@ -32,7 +37,13 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def output_dir_for(top_k: int) -> Path:
+def output_dir_for(
+    top_k: int,
+    experiment_name: str | None = None,
+) -> Path:
+    if experiment_name:
+        return BENCHMARK_DIR / f"learned_ranker_{experiment_name}"
+
     if top_k == 100:
         return BENCHMARK_DIR / "learned_ranker"
 
@@ -376,7 +387,8 @@ def main() -> None:
     args = parse_args()
 
     root = output_dir_for(
-        args.candidate_top_k
+        args.candidate_top_k,
+        args.experiment_name,
     )
 
     features_path = (
