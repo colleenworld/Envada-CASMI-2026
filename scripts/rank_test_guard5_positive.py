@@ -27,6 +27,11 @@ NEIGHBOR_TOP500_PATH = (
     / "guard5_neighbor_top500.parquet"
 )
 
+FINGERPRINT_PATH = (
+    TEST_ROOT
+    / "guard5_spectrum_fingerprint.parquet"
+)
+
 PREDICTION_DIR = (
     TEST_ROOT
     / "guard5_mist/predictions"
@@ -38,6 +43,7 @@ OUTPUT_PATH = (
 )
 
 RRF_K = 60.0
+FINGERPRINT_RRF_WEIGHT = 1.0
 GUARD_DEPTH = 5
 MASS_PENALTY = 0.020
 
@@ -67,6 +73,74 @@ def main() -> None:
 
     neighbor = pd.read_parquet(
         NEIGHBOR_TOP500_PATH
+    )
+
+    if not FINGERPRINT_PATH.exists():
+        raise FileNotFoundError(
+            "Missing guard-5 spectrum fingerprint scores: "
+            f"{FINGERPRINT_PATH}"
+        )
+
+    fingerprint = pd.read_parquet(
+        FINGERPRINT_PATH
+    )
+
+    required_fingerprint = {
+        "hypothesis_spec",
+        "candidate_formula",
+        "candidate_inchikey14",
+        "predicted_fp_rank",
+        "predicted_fp_log_likelihood",
+    }
+
+    missing_fingerprint = (
+        required_fingerprint
+        - set(fingerprint.columns)
+    )
+
+    if missing_fingerprint:
+        raise ValueError(
+            "Spectrum fingerprint artifact missing columns: "
+            f"{sorted(missing_fingerprint)}"
+        )
+
+    fingerprint["hypothesis_spec"] = (
+        fingerprint["hypothesis_spec"].astype(str)
+    )
+    fingerprint["candidate_formula"] = (
+        fingerprint["candidate_formula"].astype(str)
+    )
+    fingerprint["candidate_inchikey14"] = (
+        fingerprint["candidate_inchikey14"].astype(str)
+    )
+
+    neighbor["hypothesis_spec"] = (
+        neighbor["hypothesis_spec"].astype(str)
+    )
+    neighbor["candidate_formula"] = (
+        neighbor["candidate_formula"].astype(str)
+    )
+    neighbor["candidate_inchikey14"] = (
+        neighbor["candidate_inchikey14"].astype(str)
+    )
+
+    neighbor = neighbor.merge(
+        fingerprint[
+            [
+                "hypothesis_spec",
+                "candidate_formula",
+                "candidate_inchikey14",
+                "predicted_fp_rank",
+                "predicted_fp_log_likelihood",
+            ]
+        ],
+        on=[
+            "hypothesis_spec",
+            "candidate_formula",
+            "candidate_inchikey14",
+        ],
+        how="left",
+        validate="one_to_one",
     )
 
     selected_specs = set(
@@ -280,6 +354,8 @@ def main() -> None:
                     "candidate_smiles",
                     "prior_rank",
                     "neighbor_prior_score",
+                    "predicted_fp_rank",
+                    "predicted_fp_log_likelihood",
                 ]
             ]
             .drop_duplicates(
@@ -440,6 +516,26 @@ def main() -> None:
                 + remainder.loc[
                     has_mist,
                     "mist_rank",
+                ].astype(float)
+            )
+        )
+
+        has_fingerprint = (
+            remainder[
+                "predicted_fp_rank"
+            ].notna()
+        )
+
+        remainder.loc[
+            has_fingerprint,
+            "_rrf_score",
+        ] += (
+            FINGERPRINT_RRF_WEIGHT
+            / (
+                RRF_K
+                + remainder.loc[
+                    has_fingerprint,
+                    "predicted_fp_rank",
                 ].astype(float)
             )
         )
@@ -645,6 +741,8 @@ def main() -> None:
         "selected_mass_error_ppm",
         "contrastive_distance",
         "neighbor_prior_score",
+        "predicted_fp_log_likelihood",
+        "predicted_fp_rank",
         "mist_rank",
         "prior_rank",
         "adaptive_rank",
