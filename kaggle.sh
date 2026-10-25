@@ -42,6 +42,18 @@ cp -a data/processed/retrieval_index \
 cp -a data/processed/pubchem_formula_index \
       "$ASSET_ROOT/project/data/processed/"
 
+FINGERPRINT_MODEL="data/processed/spectrum_fingerprint/prototype/spectrum_to_morgan2048.pt"
+
+if [ ! -f "$FINGERPRINT_MODEL" ]; then
+  echo "Missing $FINGERPRINT_MODEL" >&2
+  exit 1
+fi
+
+mkdir -p "$ASSET_ROOT/project/data/processed/spectrum_fingerprint/prototype"
+
+cp "$FINGERPRINT_MODEL" \
+   "$ASSET_ROOT/project/data/processed/spectrum_fingerprint/prototype/"
+
 mkdir -p "$ASSET_ROOT/project/data/external"
 
 if [ ! -d data/external/coconut ]; then
@@ -97,6 +109,7 @@ echo
 echo "Packaged asset sizes:"
 du -sh "$ASSET_ROOT/project/data/processed/pubchem_formula_index"
 du -sh "$ASSET_ROOT/project/data/processed/retrieval_index"
+du -sh "$ASSET_ROOT/project/data/processed/spectrum_fingerprint"
 du -sh "$ASSET_ROOT/MIST"
 du -sh "$ASSET_ROOT/wheelhouse"
 
@@ -104,7 +117,7 @@ echo
 echo "Uploading Kaggle dataset version..."
 
 kaggle datasets version \
-  -m "PubChem-pruned inference assets" \
+  -m "Guard-5 + spectrum fingerprint inference assets" \
   -p "$ASSET_ROOT" \
   -t \
   -r zip
