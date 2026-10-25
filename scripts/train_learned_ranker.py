@@ -72,6 +72,13 @@ OPTIONAL_NEIGHBOR_FEATURE_COLUMNS = [
     "neighbor_feature_count",
 ]
 
+OPTIONAL_SPECTRUM_FINGERPRINT_COLUMNS = [
+    "predicted_fp_soft_jaccard",
+    "predicted_fp_cosine",
+    "predicted_fp_positive_mean",
+    "predicted_fp_log_likelihood",
+]
+
 
 def rr25(
     rank: float | int | None,
@@ -405,6 +412,12 @@ def main() -> None:
             column
             for column
             in OPTIONAL_NEIGHBOR_FEATURE_COLUMNS
+            if column in frame.columns
+        ],
+        *[
+            column
+            for column
+            in OPTIONAL_SPECTRUM_FINGERPRINT_COLUMNS
             if column in frame.columns
         ],
     ]
