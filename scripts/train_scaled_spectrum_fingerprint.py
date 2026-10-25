@@ -446,11 +446,41 @@ def main() -> None:
         device
     )
 
-    positive_rate = float(
-        np.asarray(
-            train_y,
-            dtype=np.float32,
-        ).mean()
+    positive_sum = 0.0
+    positive_count = 0
+
+    density_chunk = 4096
+
+    for start in range(
+        0,
+        len(
+            train_y
+        ),
+        density_chunk,
+    ):
+        chunk = train_y[
+            start:
+            start
+            + density_chunk
+        ]
+
+        positive_sum += float(
+            np.asarray(
+                chunk,
+                dtype=np.float32,
+            ).sum()
+        )
+
+        positive_count += int(
+            chunk.size
+        )
+
+    positive_rate = (
+        positive_sum
+        / max(
+            positive_count,
+            1,
+        )
     )
 
     pos_weight_value = (
