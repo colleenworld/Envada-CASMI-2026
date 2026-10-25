@@ -48,6 +48,13 @@ NEIGHBOR_ENRICHMENT_COLUMNS = [
     "neighbor_feature_count",
 ]
 
+SPECTRUM_FINGERPRINT_COLUMNS = [
+    "predicted_fp_soft_jaccard",
+    "predicted_fp_cosine",
+    "predicted_fp_positive_mean",
+    "predicted_fp_log_likelihood",
+]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -330,6 +337,59 @@ def main() -> None:
         ].isna().all(axis=None):
             raise RuntimeError(
                 "Neighbor enrichment merge produced no usable values"
+            )
+
+        spectrum_fp_path = (
+            output_dir
+            / "spectrum_fingerprint_enrichment.parquet"
+        )
+
+        if spectrum_fp_path.exists():
+            spectrum_fp = pd.read_parquet(
+                spectrum_fp_path
+            )
+
+            required_spectrum_fp = {
+                "inchikey14",
+                "candidate_formula",
+                "candidate_inchikey14",
+                *SPECTRUM_FINGERPRINT_COLUMNS,
+            }
+
+            missing_spectrum_fp = (
+                required_spectrum_fp
+                - set(
+                    spectrum_fp.columns
+                )
+            )
+
+            if missing_spectrum_fp:
+                raise ValueError(
+                    "Spectrum-fingerprint enrichment is missing columns: "
+                    f"{sorted(missing_spectrum_fp)}"
+                )
+
+            features = features.merge(
+                spectrum_fp[
+                    [
+                        "inchikey14",
+                        "candidate_formula",
+                        "candidate_inchikey14",
+                        *SPECTRUM_FINGERPRINT_COLUMNS,
+                    ]
+                ],
+                on=[
+                    "inchikey14",
+                    "candidate_formula",
+                    "candidate_inchikey14",
+                ],
+                how="left",
+                validate="one_to_one",
+            )
+
+            print(
+                "Merged spectrum-fingerprint enrichment:",
+                spectrum_fp_path,
             )
 
     if features[
