@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -36,16 +37,6 @@ PUBCHEM_ROOT = Path(
     "data/processed/pubchem_formula_index"
 )
 
-MODEL_PATH = Path(
-    "data/processed/spectrum_fingerprint/prototype/"
-    "spectrum_to_morgan2048.pt"
-)
-
-OUTPUT_PATH = (
-    ROOT
-    / "learned_ranker_top500/"
-    "spectrum_fingerprint_enrichment.parquet"
-)
 
 MAX_MZ = 1500.0
 BIN_WIDTH = 1.0
@@ -54,6 +45,21 @@ FP_BITS = 2048
 EPS = 1e-6
 
 RDLogger.DisableLog("rdApp.*")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model-name",
+        default="prototype",
+        help="Subdirectory under data/processed/spectrum_fingerprint.",
+    )
+    parser.add_argument(
+        "--output-name",
+        default=None,
+        help="Output enrichment stem. Defaults to the model name.",
+    )
+    return parser.parse_args()
 
 
 class SpectrumFingerprintMLP(
@@ -439,13 +445,33 @@ def load_candidate_smiles(
 
 
 def main() -> None:
+    args = parse_args()
+
+    model_path = (
+        Path("data/processed/spectrum_fingerprint")
+        / args.model_name
+        / "spectrum_to_morgan2048.pt"
+    )
+
+    output_name = (
+        args.output_name
+        if args.output_name is not None
+        else args.model_name
+    )
+
+    output_path = (
+        ROOT
+        / "learned_ranker_top500"
+        / f"spectrum_fingerprint_enrichment_{output_name}.parquet"
+    )
+
     for path in [
         CANDIDATES_PATH,
         SAMPLE_PATH,
         TRAIN_PATH,
         PUBCHEM_ROOT
         / "formula_buckets.parquet",
-        MODEL_PATH,
+        model_path,
     ]:
         if not path.exists():
             raise FileNotFoundError(
@@ -494,7 +520,7 @@ def main() -> None:
         )
 
     checkpoint = torch.load(
-        MODEL_PATH,
+        model_path,
         map_location="cpu",
         weights_only=True,
     )
@@ -872,13 +898,13 @@ def main() -> None:
             f"{duplicates:,} duplicate rows"
         )
 
-    OUTPUT_PATH.parent.mkdir(
+    output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
     result.to_parquet(
-        OUTPUT_PATH,
+        output_path,
         index=False,
         compression="zstd",
     )
@@ -986,7 +1012,7 @@ def main() -> None:
     print()
     print(
         "Wrote:",
-        OUTPUT_PATH,
+        output_path,
     )
 
 
