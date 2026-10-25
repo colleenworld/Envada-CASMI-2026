@@ -108,6 +108,9 @@ def main() -> None:
         / "data/processed/pubchem_formula_index",
         project_root
         / "data/external/coconut",
+        project_root
+        / "data/processed/spectrum_fingerprint/prototype/"
+        "spectrum_to_morgan2048.pt",
         mist_root / "src",
         mist_root
         / "pretrained_models/"
@@ -277,6 +280,10 @@ def main() -> None:
         [
             python,
             "scripts/prepare_test_guard5_candidates.py",
+        ],
+        [
+            python,
+            "scripts/score_test_guard5_spectrum_fingerprint.py",
         ],
         [
             python,
