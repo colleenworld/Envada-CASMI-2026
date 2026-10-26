@@ -38,10 +38,15 @@ MODEL_PATH = (
 def finite_summary(
     series: pd.Series,
 ) -> dict[str, float]:
-    values = pd.to_numeric(
-        series,
-        errors="coerce",
-    ).replace(
+    if pd.api.types.is_bool_dtype(series.dtype):
+        values = series.astype(np.float64)
+    else:
+        values = pd.to_numeric(
+            series,
+            errors="coerce",
+        )
+
+    values = values.replace(
         [
             np.inf,
             -np.inf,
