@@ -23,9 +23,11 @@ TEST_PATH = (
     / "data/raw/test.parquet"
 )
 
-INDEX_DIR = (
-    PROJECT_ROOT
-    / "data/processed/retrieval_index"
+INDEX_DIR = Path(
+    os.environ.get(
+        "CASMI26_RETRIEVAL_INDEX_DIR",
+        PROJECT_ROOT / "data/processed/retrieval_index",
+    )
 )
 
 POSITIVE_RANKING_PATH = (
@@ -34,9 +36,11 @@ POSITIVE_RANKING_PATH = (
       "positive_contrastive_ranked_candidates.parquet"
 )
 
-STRUCTURES_PATH = (
-    PROJECT_ROOT
-    / "data/processed/structure_index/structures.parquet"
+STRUCTURES_PATH = Path(
+    os.environ.get(
+        "CASMI26_STRUCTURES_PATH",
+        PROJECT_ROOT / "data/processed/structure_index/structures.parquet",
+    )
 )
 
 #
