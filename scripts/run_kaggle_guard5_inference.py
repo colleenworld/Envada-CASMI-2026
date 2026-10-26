@@ -186,11 +186,10 @@ def main() -> None:
         mist_root
     )
 
-    python = str(
-        Path(
-            sys.executable
-        ).resolve()
-    )
+    # Preserve the virtual-environment interpreter path.
+    # Resolving it follows the venv symlink back to /usr/bin/python
+    # and loses the environment's installed packages.
+    python = sys.executable
 
     env[
         "MIST_PYTHON"
