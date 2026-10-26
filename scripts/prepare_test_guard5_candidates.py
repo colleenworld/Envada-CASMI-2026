@@ -50,14 +50,18 @@ PUBCHEM_ASSET_ROOT = (
     / "data/processed/pubchem_formula_index"
 )
 
-RETRIEVAL_INDEX_DIR = (
-    PROJECT_ROOT
-    / "data/processed/retrieval_index"
+RETRIEVAL_INDEX_DIR = Path(
+    os.environ.get(
+        "CASMI26_RETRIEVAL_INDEX_DIR",
+        PROJECT_ROOT / "data/processed/retrieval_index",
+    )
 )
 
-STRUCTURES_PATH = (
-    PROJECT_ROOT
-    / "data/processed/structure_index/structures.parquet"
+STRUCTURES_PATH = Path(
+    os.environ.get(
+        "CASMI26_STRUCTURES_PATH",
+        PROJECT_ROOT / "data/processed/structure_index/structures.parquet",
+    )
 )
 
 COCONUT_PATH = (
