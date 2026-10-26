@@ -12,9 +12,6 @@ TRAIN_PATH = Path("data/raw/train.parquet")
 VALIDATION_PATH = Path(
     "data/processed/splits/validation_structures.parquet"
 )
-STRUCTURES_PATH = Path(
-    "data/processed/structure_index/structures.parquet"
-)
 OUTPUT_ROOT = Path(
     "data/processed/blind_pseudotest"
 )
@@ -77,7 +74,6 @@ def main() -> None:
     for path in [
         TRAIN_PATH,
         VALIDATION_PATH,
-        STRUCTURES_PATH,
     ]:
         if not path.exists():
             raise FileNotFoundError(
@@ -160,6 +156,8 @@ def main() -> None:
 
     source_columns = [
         "inchikey14",
+        "normalized_smiles",
+        "molecular_formula",
         "spectrum_id",
         "ms2_mzs",
         "ms2_normalized_intensities",
@@ -262,18 +260,82 @@ def main() -> None:
         TEST_COLUMNS
     ].copy()
 
-    structures = pd.read_parquet(
-        STRUCTURES_PATH,
-        columns=[
-            "inchikey14",
-            "normalized_smiles",
-            "molecular_formula",
-        ],
+    # Resolve truth metadata directly from the raw validation spectra.
+    # This avoids depending on a secondary structure index that may omit
+    # otherwise valid validation structures.
+    truth_observations = (
+        spectra[
+            [
+                "inchikey14",
+                "normalized_smiles",
+                "molecular_formula",
+            ]
+        ]
+        .dropna(
+            subset=[
+                "normalized_smiles",
+                "molecular_formula",
+            ]
+        )
+        .copy()
     )
 
-    structures["inchikey14"] = (
-        structures["inchikey14"]
+    truth_observations[
+        "inchikey14"
+    ] = (
+        truth_observations[
+            "inchikey14"
+        ]
         .astype(str)
+    )
+
+    truth_counts = (
+        truth_observations
+        .groupby(
+            [
+                "inchikey14",
+                "normalized_smiles",
+                "molecular_formula",
+            ],
+            dropna=False,
+        )
+        .size()
+        .rename(
+            "observation_count"
+        )
+        .reset_index()
+        .sort_values(
+            [
+                "inchikey14",
+                "observation_count",
+                "normalized_smiles",
+                "molecular_formula",
+            ],
+            ascending=[
+                True,
+                False,
+                True,
+                True,
+            ],
+            kind="stable",
+        )
+    )
+
+    truth_metadata = (
+        truth_counts
+        .drop_duplicates(
+            subset=[
+                "inchikey14",
+            ],
+            keep="first",
+        )
+        [
+            [
+                "inchikey14",
+                "normalized_smiles",
+                "molecular_formula",
+            ]
+        ]
     )
 
     truth = (
@@ -289,21 +351,27 @@ def main() -> None:
             }
         )
         .merge(
-            structures,
+            truth_metadata,
             on="inchikey14",
             how="left",
             validate="one_to_one",
         )
     )
 
-    if truth[
-        [
-            "normalized_smiles",
-            "molecular_formula",
-        ]
-    ].isna().any(axis=None):
+    incomplete_truth = truth[
+        truth[
+            [
+                "normalized_smiles",
+                "molecular_formula",
+            ]
+        ].isna().any(axis=1)
+    ]
+
+    if not incomplete_truth.empty:
         raise RuntimeError(
-            "Truth metadata is incomplete for selected structures"
+            "Truth metadata is incomplete even in raw train.parquet for "
+            f"{len(incomplete_truth):,} selected structures. "
+            f"Examples: {incomplete_truth['inchikey14'].head(20).tolist()}"
         )
 
     sample_submission = pd.DataFrame(
