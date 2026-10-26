@@ -108,6 +108,13 @@ def main() -> None:
         / "data/processed/pubchem_formula_index",
         project_root
         / "data/external/coconut",
+        project_root
+        / "data/processed/spectrum_fingerprint/prototype/"
+          "spectrum_to_morgan2048.pt",
+        project_root
+        / "data/processed/diagnostics/large_validation_audit/"
+          "true_formula_neighbor_benchmark/"
+          "learned_ranker_top500/lgbm_ranker.txt",
         mist_root / "src",
         mist_root
         / "pretrained_models/"
@@ -261,7 +268,7 @@ def main() -> None:
         )
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
-            "RDKit is required for guard-5 inference and was not "
+            "RDKit is required for learned-ranker inference and was not "
             "available after offline wheelhouse setup."
         ) from exc
 
@@ -272,33 +279,19 @@ def main() -> None:
         ],
         [
             python,
-            "scripts/export_test_mist_inputs.py",
-        ],
-        [
-            python,
             "scripts/prepare_test_guard5_candidates.py",
         ],
         [
             python,
-            "scripts/run_test_guard5_mist.py",
-            "--mist-root",
-            str(
-                mist_root
-            ),
-            "--mist-python",
-            python,
-            "--hdf-formulas-per-batch",
-            str(
-                args.hdf_formulas_per_batch
-            ),
-            "--hdf-workers",
-            str(
-                args.hdf_workers
-            ),
+            "scripts/score_test_guard5_spectrum_fingerprint.py",
         ],
         [
             python,
-            "scripts/rank_test_guard5_positive.py",
+            "scripts/build_test_learned_ranker_features.py",
+        ],
+        [
+            python,
+            "scripts/rank_test_learned_ranker.py",
         ],
         [
             python,
