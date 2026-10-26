@@ -234,10 +234,12 @@ def main() -> None:
         .map(key_to_molecule)
     )
 
+    # Preserve the deterministic scan order from train.parquet.
+    # The original source spectrum identifier is not required for the
+    # blind harness; assign anonymous per-molecule IDs instead.
     spectra = spectra.sort_values(
         [
             "molecule_id",
-            "spectrum_id",
         ],
         kind="stable",
     ).reset_index(
