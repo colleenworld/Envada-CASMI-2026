@@ -42,6 +42,29 @@ cp -a data/processed/retrieval_index \
 cp -a data/processed/pubchem_formula_index \
       "$ASSET_ROOT/project/data/processed/"
 
+FINGERPRINT_MODEL="data/processed/spectrum_fingerprint/prototype/spectrum_to_morgan2048.pt"
+RANKER_MODEL="data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500/lgbm_ranker.txt"
+
+for required_file in \
+  "$FINGERPRINT_MODEL" \
+  "$RANKER_MODEL"
+do
+  if [ ! -f "$required_file" ]; then
+    echo "Missing $required_file" >&2
+    exit 1
+  fi
+done
+
+mkdir -p "$ASSET_ROOT/project/data/processed/spectrum_fingerprint/prototype"
+
+cp "$FINGERPRINT_MODEL" \
+   "$ASSET_ROOT/project/data/processed/spectrum_fingerprint/prototype/"
+
+mkdir -p "$ASSET_ROOT/project/data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500"
+
+cp "$RANKER_MODEL" \
+   "$ASSET_ROOT/project/data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500/"
+
 mkdir -p "$ASSET_ROOT/project/data/external"
 
 if [ ! -d data/external/coconut ]; then
@@ -74,10 +97,11 @@ cp "$MIST_ROOT/pretrained_models/mist_contrastive_canopus_pretrain.ckpt" \
    "$ASSET_ROOT/MIST/pretrained_models/"
 
 echo
-echo "Downloading Kaggle CPython 3.13 RDKit wheel..."
+echo "Downloading Kaggle CPython 3.13 inference wheels..."
 
 uvx --from pip pip download \
   "rdkit==2026.9.1" \
+  "lightgbm==4.7.0" \
   --only-binary=:all: \
   --platform manylinux_2_28_x86_64 \
   --python-version 313 \
@@ -87,9 +111,15 @@ uvx --from pip pip download \
   --dest "$ASSET_ROOT/wheelhouse"
 
 RDKIT_WHEEL_COUNT="$(find "$ASSET_ROOT/wheelhouse" -maxdepth 1 -type f -name 'rdkit-*-cp313-*.whl' | wc -l)"
+LIGHTGBM_WHEEL_COUNT="$(find "$ASSET_ROOT/wheelhouse" -maxdepth 1 -type f -name 'lightgbm-*.whl' | wc -l)"
 
 if [ "$RDKIT_WHEEL_COUNT" -ne 1 ]; then
   echo "Expected exactly one CPython 3.13 RDKit wheel; found $RDKIT_WHEEL_COUNT" >&2
+  exit 1
+fi
+
+if [ "$LIGHTGBM_WHEEL_COUNT" -ne 1 ]; then
+  echo "Expected exactly one LightGBM wheel; found $LIGHTGBM_WHEEL_COUNT" >&2
   exit 1
 fi
 
@@ -97,6 +127,8 @@ echo
 echo "Packaged asset sizes:"
 du -sh "$ASSET_ROOT/project/data/processed/pubchem_formula_index"
 du -sh "$ASSET_ROOT/project/data/processed/retrieval_index"
+du -sh "$ASSET_ROOT/project/data/processed/spectrum_fingerprint"
+du -sh "$ASSET_ROOT/project/data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500"
 du -sh "$ASSET_ROOT/MIST"
 du -sh "$ASSET_ROOT/wheelhouse"
 
@@ -104,7 +136,7 @@ echo
 echo "Uploading Kaggle dataset version..."
 
 kaggle datasets version \
-  -m "PubChem-pruned inference assets" \
+  -m "Validated learned-ranker inference assets" \
   -p "$ASSET_ROOT" \
   -t \
   -r zip
