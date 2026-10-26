@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from rdkit import Chem, RDLogger
+from rdkit import Chem, DataStructs, RDLogger
 from rdkit.Chem import AllChem
 
 from casmi26.pubchem.inference_asset import (
@@ -803,12 +803,14 @@ def main() -> None:
             )
             continue
 
+        raw_neighbors = neighbors_by_source[
+            source_id
+        ]
+
         scores, usable_neighbors = (
             score_candidates(
                 candidate_fps,
-                neighbors_by_source[
-                    source_id
-                ],
+                raw_neighbors,
                 training_fps,
             )
         )
@@ -816,6 +818,249 @@ def main() -> None:
         valid[
             "neighbor_prior_score"
         ] = scores
+
+        usable = [
+            (
+                key,
+                max(float(spectral_score), 0.0),
+                training_fps[key],
+            )
+            for key, spectral_score in raw_neighbors
+            if key in training_fps
+        ]
+
+        row_count = len(valid)
+
+        tanimoto_max = np.full(
+            row_count,
+            np.nan,
+            dtype=np.float32,
+        )
+        tanimoto_mean = np.full(
+            row_count,
+            np.nan,
+            dtype=np.float32,
+        )
+        tanimoto_top3_mean = np.full(
+            row_count,
+            np.nan,
+            dtype=np.float32,
+        )
+        tanimoto_top5_mean = np.full(
+            row_count,
+            np.nan,
+            dtype=np.float32,
+        )
+        weighted_mean = np.full(
+            row_count,
+            np.nan,
+            dtype=np.float32,
+        )
+        weighted_top3_mean = np.full(
+            row_count,
+            np.nan,
+            dtype=np.float32,
+        )
+        count_ge_03 = np.zeros(
+            row_count,
+            dtype=np.int16,
+        )
+        count_ge_05 = np.zeros(
+            row_count,
+            dtype=np.int16,
+        )
+        count_ge_07 = np.zeros(
+            row_count,
+            dtype=np.int16,
+        )
+        best_neighbor_spectral_score = np.full(
+            row_count,
+            np.nan,
+            dtype=np.float32,
+        )
+
+        if usable and candidate_fps:
+            similarities = np.empty(
+                (
+                    len(usable),
+                    len(candidate_fps),
+                ),
+                dtype=np.float32,
+            )
+
+            weights = np.asarray(
+                [
+                    spectral_score
+                    for _, spectral_score, _
+                    in usable
+                ],
+                dtype=np.float32,
+            )
+
+            for neighbor_index, (
+                _,
+                _,
+                neighbor_fp,
+            ) in enumerate(usable):
+                similarities[
+                    neighbor_index
+                ] = np.asarray(
+                    DataStructs.BulkTanimotoSimilarity(
+                        neighbor_fp,
+                        candidate_fps,
+                    ),
+                    dtype=np.float32,
+                )
+
+            sorted_sim = np.sort(
+                similarities,
+                axis=0,
+            )[::-1]
+
+            weighted = (
+                similarities
+                * weights[:, None]
+            )
+
+            sorted_weighted = np.sort(
+                weighted,
+                axis=0,
+            )[::-1]
+
+            max_neighbor_idx = np.argmax(
+                similarities,
+                axis=0,
+            )
+
+            weight_sum = float(
+                weights.sum()
+            )
+
+            for local_column in range(
+                len(candidate_fps)
+            ):
+                values = similarities[
+                    :,
+                    local_column,
+                ]
+
+                tanimoto_max[
+                    local_column
+                ] = float(
+                    values.max()
+                )
+
+                tanimoto_mean[
+                    local_column
+                ] = float(
+                    values.mean()
+                )
+
+                tanimoto_top3_mean[
+                    local_column
+                ] = float(
+                    sorted_sim[
+                        :min(3, len(usable)),
+                        local_column,
+                    ].mean()
+                )
+
+                tanimoto_top5_mean[
+                    local_column
+                ] = float(
+                    sorted_sim[
+                        :min(5, len(usable)),
+                        local_column,
+                    ].mean()
+                )
+
+                if weight_sum > 0:
+                    weighted_mean[
+                        local_column
+                    ] = float(
+                        weighted[
+                            :,
+                            local_column,
+                        ].sum()
+                        / weight_sum
+                    )
+
+                weighted_top3_mean[
+                    local_column
+                ] = float(
+                    sorted_weighted[
+                        :min(3, len(usable)),
+                        local_column,
+                    ].mean()
+                )
+
+                count_ge_03[
+                    local_column
+                ] = int(
+                    np.sum(
+                        values >= 0.3
+                    )
+                )
+
+                count_ge_05[
+                    local_column
+                ] = int(
+                    np.sum(
+                        values >= 0.5
+                    )
+                )
+
+                count_ge_07[
+                    local_column
+                ] = int(
+                    np.sum(
+                        values >= 0.7
+                    )
+                )
+
+                best_neighbor_spectral_score[
+                    local_column
+                ] = float(
+                    weights[
+                        max_neighbor_idx[
+                            local_column
+                        ]
+                    ]
+                )
+
+        valid[
+            "neighbor_tanimoto_max"
+        ] = tanimoto_max
+        valid[
+            "neighbor_tanimoto_mean"
+        ] = tanimoto_mean
+        valid[
+            "neighbor_tanimoto_top3_mean"
+        ] = tanimoto_top3_mean
+        valid[
+            "neighbor_tanimoto_top5_mean"
+        ] = tanimoto_top5_mean
+        valid[
+            "neighbor_weighted_mean"
+        ] = weighted_mean
+        valid[
+            "neighbor_weighted_top3_mean"
+        ] = weighted_top3_mean
+        valid[
+            "neighbor_count_ge_03"
+        ] = count_ge_03
+        valid[
+            "neighbor_count_ge_05"
+        ] = count_ge_05
+        valid[
+            "neighbor_count_ge_07"
+        ] = count_ge_07
+        valid[
+            "best_structural_neighbor_spectral_score"
+        ] = best_neighbor_spectral_score
+        valid[
+            "neighbor_feature_count"
+        ] = usable_neighbors
 
         valid = (
             valid
