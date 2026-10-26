@@ -19,6 +19,12 @@ OUTPUT_ROOT = Path(
     "data/processed/blind_pseudotest"
 )
 
+LEARNED_RANKER_FEATURES_PATH = Path(
+    "data/processed/diagnostics/large_validation_audit/"
+    "true_formula_neighbor_benchmark/"
+    "learned_ranker_top500/candidate_features.parquet"
+)
+
 TEST_COLUMNS = [
     "molecule_id",
     "spectrum_id",
@@ -92,10 +98,37 @@ def main() -> None:
         .to_numpy(dtype=object)
     )
 
-    sample_size = min(
-        args.sample_size,
-        len(validation_keys),
+    excluded_ranker_keys: set[str] = set()
+
+    if LEARNED_RANKER_FEATURES_PATH.exists():
+        ranker_population = pd.read_parquet(
+            LEARNED_RANKER_FEATURES_PATH,
+            columns=["inchikey14"],
+        )
+
+        excluded_ranker_keys = set(
+            ranker_population["inchikey14"]
+            .dropna()
+            .astype(str)
+        )
+
+    eligible_keys = np.asarray(
+        [
+            key
+            for key in validation_keys
+            if key not in excluded_ranker_keys
+        ],
+        dtype=object,
     )
+
+    if len(eligible_keys) < args.sample_size:
+        raise RuntimeError(
+            "Not enough validation structures remain after excluding "
+            "the learned-ranker benchmark population: "
+            f"requested={args.sample_size:,}, eligible={len(eligible_keys):,}"
+        )
+
+    sample_size = args.sample_size
 
     rng = np.random.default_rng(
         args.seed
@@ -103,7 +136,7 @@ def main() -> None:
 
     selected = np.sort(
         rng.choice(
-            validation_keys,
+            eligible_keys,
             size=sample_size,
             replace=False,
         )
@@ -321,6 +354,14 @@ def main() -> None:
     print(
         "Validation structures available:",
         f"{len(validation_keys):,}",
+    )
+    print(
+        "Excluded learned-ranker benchmark structures:",
+        f"{len(excluded_ranker_keys):,}",
+    )
+    print(
+        "Eligible blind structures:",
+        f"{len(eligible_keys):,}",
     )
     print(
         "Selected structures:",
