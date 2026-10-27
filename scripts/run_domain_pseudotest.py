@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 import shutil
@@ -18,6 +19,21 @@ ROOT = (
     PROJECT_ROOT
     / "data/processed/domain_pseudotest"
 )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--mist-root",
+        type=Path,
+        default=Path(
+            os.environ.get(
+                "MIST_ROOT",
+                "/home/colleen/PycharmProjects/MIST",
+            )
+        ),
+    )
+    return parser.parse_args()
 
 
 def run(
@@ -78,9 +94,23 @@ def restore_file(
 
 
 def main() -> None:
+    args = parse_args()
+
     python = sys.executable
 
     env = os.environ.copy()
+
+    mist_root = (
+        args.mist_root
+        .expanduser()
+        .resolve()
+    )
+
+    env[
+        "MIST_ROOT"
+    ] = str(
+        mist_root
+    )
 
     env[
         "CASMI26_PROJECT_ROOT"
@@ -179,6 +209,10 @@ def main() -> None:
                 "--project-root",
                 str(
                     PROJECT_ROOT
+                ),
+                "--mist-root",
+                str(
+                    mist_root
                 ),
                 "--test-path",
                 str(
