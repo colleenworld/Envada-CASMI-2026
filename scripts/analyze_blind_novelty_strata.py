@@ -245,24 +245,67 @@ def main() -> None:
         "Loading PubChem candidates for truth formulas..."
     )
 
-    pubchem = (
-        load_pubchem_candidates_for_formulas(
-            PUBCHEM_ROOT,
-            formulas,
-        )
+    formula_buckets = pd.read_parquet(
+        PUBCHEM_ROOT
+        / "formula_buckets.parquet",
+        columns=[
+            "molecular_formula",
+        ],
     )
 
-    pubchem_pairs = set(
-        zip(
-            pubchem[
-                "molecular_formula"
-            ].astype(str),
-            pubchem[
-                "inchikey14"
-            ].astype(str),
-            strict=True,
-        )
+    available_pubchem_formulas = set(
+        formula_buckets[
+            "molecular_formula"
+        ]
+        .dropna()
+        .astype(str)
     )
+
+    requested_pubchem_formulas = sorted(
+        set(
+            formulas
+        )
+        & available_pubchem_formulas
+    )
+
+    missing_pubchem_formulas = sorted(
+        set(
+            formulas
+        )
+        - available_pubchem_formulas
+    )
+
+    print(
+        "Truth formulas present in PubChem asset:",
+        f"{len(requested_pubchem_formulas):,}",
+    )
+
+    print(
+        "Truth formulas absent from PubChem asset:",
+        f"{len(missing_pubchem_formulas):,}",
+    )
+
+    if requested_pubchem_formulas:
+        pubchem = (
+            load_pubchem_candidates_for_formulas(
+                PUBCHEM_ROOT,
+                requested_pubchem_formulas,
+            )
+        )
+
+        pubchem_pairs = set(
+            zip(
+                pubchem[
+                    "molecular_formula"
+                ].astype(str),
+                pubchem[
+                    "inchikey14"
+                ].astype(str),
+                strict=True,
+            )
+        )
+    else:
+        pubchem_pairs = set()
 
     annotated = truth.merge(
         evaluation[
@@ -287,6 +330,18 @@ def main() -> None:
         ]
         .isin(
             coconut_keys
+        )
+    )
+
+    annotated[
+        "pubchem_formula_present"
+    ] = (
+        annotated[
+            "molecular_formula"
+        ]
+        .astype(str)
+        .isin(
+            available_pubchem_formulas
         )
     )
 
@@ -323,6 +378,12 @@ def main() -> None:
             ]
         )
 
+        pubchem_formula_present = bool(
+            row[
+                "pubchem_formula_present"
+            ]
+        )
+
         if in_coconut and in_pubchem:
             return "coconut+pubchem"
 
@@ -332,7 +393,10 @@ def main() -> None:
         if in_coconut:
             return "coconut_only"
 
-        return "absent_external_databases"
+        if not pubchem_formula_present:
+            return "pubchem_formula_absent"
+
+        return "formula_present_truth_structure_absent"
 
     annotated[
         "database_stratum"
@@ -385,6 +449,11 @@ def main() -> None:
         summarize(
             annotated,
             group_column=
+                "pubchem_formula_present",
+        ),
+        summarize(
+            annotated,
+            group_column=
                 "in_pubchem_asset",
         ),
         summarize(
@@ -419,6 +488,7 @@ def main() -> None:
 
     for dimension in [
         "database_stratum",
+        "pubchem_formula_present",
         "in_pubchem_asset",
         "in_approved_coconut",
         "candidate_availability",
