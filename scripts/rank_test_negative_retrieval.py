@@ -285,7 +285,30 @@ def build_reference_cache(
     }
 
 
+def load_excluded_structure_keys() -> set[str]:
+    path = os.environ.get(
+        "CASMI26_EXCLUDED_STRUCTURE_KEYS_PATH",
+        "",
+    ).strip()
+
+    if not path:
+        return set()
+
+    frame = pd.read_parquet(
+        Path(path),
+        columns=["inchikey14"],
+    )
+
+    return set(
+        frame["inchikey14"]
+        .dropna()
+        .astype(str)
+    )
+
+
 def main():
+    excluded_structure_keys = load_excluded_structure_keys()
+
     #
     # Determine which test molecules were NOT handled by the
     # positive contrastive branch.
@@ -457,6 +480,32 @@ def main():
             INDEX_DIR
         )
     )
+
+    if excluded_structure_keys:
+        keep_mask = ~(
+            metadata["inchikey14"]
+            .astype(str)
+            .isin(excluded_structure_keys)
+            .to_numpy()
+        )
+
+        metadata = (
+            metadata.loc[
+                keep_mask
+            ]
+            .reset_index(drop=True)
+        )
+
+        vectors = vectors[
+            np.flatnonzero(
+                keep_mask
+            )
+        ]
+
+        print(
+            "Excluded reference structures:",
+            f"{len(excluded_structure_keys):,}",
+        )
 
     print(
         "Reference spectra:",
