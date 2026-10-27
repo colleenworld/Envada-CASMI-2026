@@ -204,7 +204,36 @@ def top_structure_neighbors(
     ]
 
 
+def load_excluded_structure_keys() -> set[str]:
+    path = os.environ.get(
+        "CASMI26_EXCLUDED_STRUCTURE_KEYS_PATH",
+        "",
+    ).strip()
+
+    if not path:
+        return set()
+
+    frame = pd.read_parquet(
+        Path(path),
+        columns=["inchikey14"],
+    )
+
+    return set(
+        frame["inchikey14"]
+        .dropna()
+        .astype(str)
+    )
+
+
 def main() -> None:
+    excluded_structure_keys = load_excluded_structure_keys()
+
+    if excluded_structure_keys:
+        print(
+            "Excluded reference structures:",
+            f"{len(excluded_structure_keys):,}",
+        )
+
     hypotheses = pd.read_parquet(
         HYPOTHESES_PATH
     )
@@ -365,6 +394,13 @@ def main() -> None:
             "molecular_formula",
         ],
     )
+
+    if excluded_structure_keys:
+        structures_all = structures_all.loc[
+            ~structures_all["inchikey14"]
+            .astype(str)
+            .isin(excluded_structure_keys)
+        ].copy()
 
     training = structures_all.loc[
         structures_all[
@@ -572,6 +608,14 @@ def main() -> None:
         .to_numpy()
         == "positive"
     )
+
+    if excluded_structure_keys:
+        mode_mask &= ~(
+            metadata["inchikey14"]
+            .astype(str)
+            .isin(excluded_structure_keys)
+            .to_numpy()
+        )
 
     mode_indices = np.flatnonzero(
         mode_mask
