@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import inchi
+from rdkit.Chem.MolStandardize import rdMolStandardize
 
 
 DEFAULT_ROOT = Path(
@@ -33,6 +34,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+TAUTOMER_ENUMERATOR = (
+    rdMolStandardize.TautomerEnumerator()
+)
+
+
 def smiles_to_key14(
     value: str,
 ) -> str | None:
@@ -41,6 +47,16 @@ def smiles_to_key14(
     )
 
     if mol is None:
+        return None
+
+    try:
+        mol = (
+            TAUTOMER_ENUMERATOR
+            .Canonicalize(
+                mol
+            )
+        )
+    except Exception:
         return None
 
     key = inchi.MolToInchiKey(
@@ -97,6 +113,23 @@ def main() -> None:
         truth["inchikey14"]
         .astype(str)
     )
+
+    truth["canonical_truth_key14"] = [
+        smiles_to_key14(
+            value
+        )
+        for value
+        in truth[
+            "normalized_smiles"
+        ]
+    ]
+
+    if truth[
+        "canonical_truth_key14"
+    ].isna().any():
+        raise RuntimeError(
+            "Some truth SMILES could not be tautomer-canonicalized"
+        )
 
     submission = pd.read_csv(
         args.submission
@@ -165,6 +198,7 @@ def main() -> None:
         [
             "molecule_id",
             "inchikey14",
+            "canonical_truth_key14",
             "molecular_formula",
         ]
     ].copy()
@@ -174,7 +208,7 @@ def main() -> None:
             truth[
                 [
                     "molecule_id",
-                    "inchikey14",
+                    "canonical_truth_key14",
                 ]
             ],
             left_on=[
@@ -183,7 +217,7 @@ def main() -> None:
             ],
             right_on=[
                 "molecule_id",
-                "inchikey14",
+                "canonical_truth_key14",
             ],
             how="inner",
         )
