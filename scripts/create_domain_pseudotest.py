@@ -21,6 +21,16 @@ LEARNED_RANKER_FEATURES_PATH = Path(
     "learned_ranker_top500/candidate_features.parquet"
 )
 
+FINGERPRINT_TRAIN_METADATA_PATH = Path(
+    "data/processed/spectrum_fingerprint/prototype/"
+    "train_metadata.parquet"
+)
+
+FINGERPRINT_DEV_METADATA_PATH = Path(
+    "data/processed/spectrum_fingerprint/prototype/"
+    "dev_metadata.parquet"
+)
+
 DOMAIN_LIBRARY = "enveda-np-examples"
 
 TEST_COLUMNS = [
@@ -160,18 +170,52 @@ def main() -> None:
             .astype(str)
         )
 
-    overlap = (
+    ranker_overlap = (
         set(
             all_domain_keys
         )
         & ranker_keys
     )
 
+    fingerprint_keys: set[str] = set()
+
+    for path in [
+        FINGERPRINT_TRAIN_METADATA_PATH,
+        FINGERPRINT_DEV_METADATA_PATH,
+    ]:
+        if path.exists():
+            frame = pd.read_parquet(
+                path,
+                columns=[
+                    "inchikey14",
+                ],
+            )
+
+            fingerprint_keys.update(
+                frame[
+                    "inchikey14"
+                ]
+                .dropna()
+                .astype(str)
+            )
+
+    fingerprint_overlap = (
+        set(
+            all_domain_keys
+        )
+        & fingerprint_keys
+    )
+
+    excluded_model_keys = (
+        ranker_overlap
+        | fingerprint_overlap
+    )
+
     evaluation_keys = sorted(
         set(
             all_domain_keys
         )
-        - overlap
+        - excluded_model_keys
     )
 
     if not evaluation_keys:
@@ -422,7 +466,15 @@ def main() -> None:
     )
     print(
         "Excluded for learned-ranker overlap:",
-        f"{len(overlap):,}",
+        f"{len(ranker_overlap):,}",
+    )
+    print(
+        "Excluded for fingerprint-model overlap:",
+        f"{len(fingerprint_overlap):,}",
+    )
+    print(
+        "Excluded for any model-training overlap:",
+        f"{len(excluded_model_keys):,}",
     )
     print(
         "Evaluation structures:",
