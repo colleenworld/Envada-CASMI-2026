@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from casmi26.chemistry.formula import parse_formula
-from scripts.enumerate_blind_formula_candidates import (
+from casmi26.chemistry.formula_enumeration import (
     build_signature_rules,
     enumerate_for_mass,
     neutral_mass_from_adduct,
@@ -434,7 +434,9 @@ def main() -> None:
         .astype(str)
     )
 
-    rules = build_signature_rules()
+    rules = build_signature_rules(
+        TRAINING_STRUCTURES_PATH
+    )
 
     (
         signature_counts,
