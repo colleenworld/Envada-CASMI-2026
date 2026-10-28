@@ -11,8 +11,8 @@ from pathlib import Path
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Run the top-3 formula + full PubChem + guard-5 "
-            "CASMI26 inference pipeline on Kaggle."
+            "Run the generated-formula-prior + expanded PubChem + "
+            "learned-ranker CASMI26 inference pipeline."
         )
     )
 
@@ -147,14 +147,26 @@ def main() -> None:
         exist_ok=True,
     )
 
-    shutil.copy2(
-        test_path,
-        raw_dir / "test.parquet",
+    target_test_path = (
+        raw_dir
+        / "test.parquet"
     )
-    shutil.copy2(
-        sample_path,
-        raw_dir / "sample_submission.csv",
+    target_sample_path = (
+        raw_dir
+        / "sample_submission.csv"
     )
+
+    if test_path != target_test_path.resolve():
+        shutil.copy2(
+            test_path,
+            target_test_path,
+        )
+
+    if sample_path != target_sample_path.resolve():
+        shutil.copy2(
+            sample_path,
+            target_sample_path,
+        )
 
     test_output = (
         project_root
@@ -272,10 +284,6 @@ def main() -> None:
         ) from exc
 
     stages = [
-        [
-            python,
-            "scripts/build_test_multispectrum_formula_hypotheses.py",
-        ],
         [
             python,
             "scripts/build_generated_test_formula_shortlist.py",
