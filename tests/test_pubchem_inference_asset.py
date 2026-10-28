@@ -339,3 +339,63 @@ def test_load_pubchem_candidates_from_assets_rejects_uncovered_formula(
         raise AssertionError(
             "Expected uncovered formula to raise KeyError"
         )
+
+
+def test_load_pubchem_candidates_from_assets_can_skip_uncovered_formula(
+    tmp_path: Path,
+):
+    from casmi26.pubchem.inference_asset import (
+        load_pubchem_candidates_from_assets,
+    )
+
+    root = tmp_path / "asset"
+    candidate_dir = root / "candidates"
+    candidate_dir.mkdir(parents=True)
+
+    pd.DataFrame(
+        {
+            "molecular_formula": [
+                "C2H6O",
+            ],
+            "bucket": [
+                0,
+            ],
+        }
+    ).to_parquet(
+        root / "formula_buckets.parquet",
+        index=False,
+    )
+
+    pd.DataFrame(
+        {
+            "molecular_formula": [
+                "C2H6O",
+            ],
+            "inchikey14": [
+                "LFQSCWFLJHTTHZ",
+            ],
+            "smiles": [
+                "CCO",
+            ],
+        }
+    ).to_parquet(
+        candidate_dir / "bucket-000.parquet",
+        index=False,
+    )
+
+    result = load_pubchem_candidates_from_assets(
+        [
+            root,
+        ],
+        {
+            "C2H6O",
+            "C9H9NO",
+        },
+        strict=False,
+    )
+
+    assert result[
+        "molecular_formula"
+    ].tolist() == [
+        "C2H6O",
+    ]
