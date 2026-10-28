@@ -10,7 +10,7 @@ from rdkit import Chem, DataStructs, RDLogger
 from rdkit.Chem import AllChem
 
 from casmi26.pubchem.inference_asset import (
-    load_pubchem_candidates_for_formulas,
+    load_pubchem_candidates_from_assets,
 )
 from casmi26.pubchem.neighbor_pruning import (
     score_candidates,
@@ -48,6 +48,12 @@ HYPOTHESES_PATH = (
 PUBCHEM_ASSET_ROOT = (
     PROJECT_ROOT
     / "data/processed/pubchem_formula_index"
+)
+
+PUBCHEM_EXPANSION_ASSET_ROOT = (
+    PROJECT_ROOT
+    / "data/processed/pubchem_formula_index_runs/"
+    "generated-test-top25"
 )
 
 RETRIEVAL_INDEX_DIR = Path(
@@ -354,9 +360,31 @@ def main() -> None:
         "Loading formula-specific PubChem candidates..."
     )
 
+    pubchem_asset_roots = [
+        PUBCHEM_ASSET_ROOT,
+    ]
+
+    if (
+        PUBCHEM_EXPANSION_ASSET_ROOT
+        / "formula_buckets.parquet"
+    ).exists():
+        pubchem_asset_roots.append(
+            PUBCHEM_EXPANSION_ASSET_ROOT
+        )
+
+    print(
+        "PubChem asset roots:"
+    )
+
+    for asset_root in pubchem_asset_roots:
+        print(
+            "  ",
+            asset_root,
+        )
+
     pubchem = (
-        load_pubchem_candidates_for_formulas(
-            PUBCHEM_ASSET_ROOT,
+        load_pubchem_candidates_from_assets(
+            pubchem_asset_roots,
             formulas,
         )
     )
