@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from casmi26.chemistry.formula import monoisotopic_mass
-from scripts.build_test_multispectrum_formula_hypotheses import (
+from casmi26.chemistry.inference import (
     FORMULA_TOLERANCE_PPM,
     is_mist_processable,
     neutral_mass_from_adduct,
