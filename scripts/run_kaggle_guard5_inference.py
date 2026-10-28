@@ -278,6 +278,14 @@ def main() -> None:
         ],
         [
             python,
+            "scripts/build_generated_test_formula_shortlist.py",
+        ],
+        [
+            python,
+            "scripts/apply_generated_test_formula_hypotheses.py",
+        ],
+        [
+            python,
             "scripts/prepare_test_guard5_candidates.py",
         ],
         [
