@@ -179,6 +179,8 @@ def load_pubchem_candidates_for_formulas(
 def load_pubchem_candidates_from_assets(
     asset_roots: list[Path] | tuple[Path, ...],
     formulas: set[str] | list[str],
+    *,
+    strict: bool = True,
 ) -> pd.DataFrame:
     requested = {
         str(formula)
@@ -216,7 +218,7 @@ def load_pubchem_candidates_from_assets(
         - covered
     )
 
-    if missing:
+    if missing and strict:
         raise KeyError(
             "Requested formulas are missing from all offline "
             "PubChem assets. Examples: "
