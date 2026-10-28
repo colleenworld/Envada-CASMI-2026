@@ -11,8 +11,8 @@ from pathlib import Path
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Run the generated-formula-prior + expanded PubChem + "
-            "learned-ranker CASMI26 inference pipeline."
+            "Run the top-3 formula + full PubChem + guard-5 "
+            "CASMI26 inference pipeline on Kaggle."
         )
     )
 
@@ -147,14 +147,8 @@ def main() -> None:
         exist_ok=True,
     )
 
-    target_test_path = (
-        raw_dir
-        / "test.parquet"
-    )
-    target_sample_path = (
-        raw_dir
-        / "sample_submission.csv"
-    )
+    target_test_path = raw_dir / "test.parquet"
+    target_sample_path = raw_dir / "sample_submission.csv"
 
     if test_path != target_test_path.resolve():
         shutil.copy2(
@@ -199,8 +193,7 @@ def main() -> None:
     )
 
     # Preserve the virtual-environment interpreter path.
-    # Resolving it follows the venv symlink back to /usr/bin/python
-    # and loses the environment's installed packages.
+    # Resolving a venv symlink can fall back to the system interpreter.
     python = sys.executable
 
     env[
@@ -286,11 +279,7 @@ def main() -> None:
     stages = [
         [
             python,
-            "scripts/build_generated_test_formula_shortlist.py",
-        ],
-        [
-            python,
-            "scripts/apply_generated_test_formula_hypotheses.py",
+            "scripts/build_test_multispectrum_formula_hypotheses.py",
         ],
         [
             python,
