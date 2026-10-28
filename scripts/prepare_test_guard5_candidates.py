@@ -409,8 +409,40 @@ def main() -> None:
         load_pubchem_candidates_from_assets(
             pubchem_asset_roots,
             formulas,
+            strict=False,
         )
     )
+
+    covered_pubchem_formulas = set(
+        pubchem[
+            "molecular_formula"
+        ]
+        .dropna()
+        .astype(str)
+    )
+
+    uncovered_pubchem_formulas = (
+        formulas
+        - covered_pubchem_formulas
+    )
+
+    print(
+        "Covered PubChem formulas:",
+        f"{len(covered_pubchem_formulas):,}",
+    )
+
+    print(
+        "Uncovered generated formulas:",
+        f"{len(uncovered_pubchem_formulas):,}",
+    )
+
+    if uncovered_pubchem_formulas:
+        print(
+            "First uncovered formulas:",
+            sorted(
+                uncovered_pubchem_formulas
+            )[:20],
+        )
 
     pubchem = pubchem.rename(
         columns={
