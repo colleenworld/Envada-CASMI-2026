@@ -296,31 +296,54 @@ def main() -> None:
         )
     ].copy()
 
-    # Keep only the top three formula hypotheses per molecule, matching
-    # the large validation result. Hypotheses are ranked by best absolute
-    # mass error, with formula as a deterministic tie-breaker.
-    positive = (
-        positive
-        .sort_values(
-            [
+    # Generated hypotheses are already ranked by the validated
+    # training-derived formula prior. Preserve that order when available;
+    # otherwise retain the legacy mass-error ranking.
+    if "formula_rank" in positive.columns:
+        positive = (
+            positive
+            .sort_values(
+                [
+                    "molecule_id",
+                    "formula_rank",
+                    "candidate_formula",
+                ],
+                ascending=[
+                    True,
+                    True,
+                    True,
+                ],
+                kind="stable",
+            )
+            .reset_index(
+                drop=True
+            )
+        )
+    else:
+        positive = (
+            positive
+            .sort_values(
+                [
+                    "molecule_id",
+                    "min_abs_mass_error_ppm",
+                    "candidate_formula",
+                ],
+                ascending=[
+                    True,
+                    True,
+                    True,
+                ],
+                kind="stable",
+            )
+            .groupby(
                 "molecule_id",
-                "min_abs_mass_error_ppm",
-                "candidate_formula",
-            ],
-            ascending=[
-                True,
-                True,
-                True,
-            ],
-            kind="stable",
+                sort=False,
+            )
+            .head(3)
+            .reset_index(
+                drop=True
+            )
         )
-        .groupby(
-            "molecule_id",
-            sort=False,
-        )
-        .head(3)
-        .reset_index(drop=True)
-    )
 
     if positive.empty:
         raise RuntimeError(
