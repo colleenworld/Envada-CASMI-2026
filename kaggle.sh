@@ -22,8 +22,7 @@ for required_dir in \
   data/processed/formula_index \
   data/processed/structure_index \
   data/processed/retrieval_index \
-  data/processed/pubchem_formula_index \
-  data/processed/pubchem_formula_index_runs/generated-test-top25
+  data/processed/pubchem_formula_index
 do
   if [ ! -d "$required_dir" ]; then
     echo "Missing $required_dir" >&2
@@ -42,11 +41,6 @@ cp -a data/processed/retrieval_index \
 
 cp -a data/processed/pubchem_formula_index \
       "$ASSET_ROOT/project/data/processed/"
-
-mkdir -p "$ASSET_ROOT/project/data/processed/pubchem_formula_index_runs"
-
-cp -a data/processed/pubchem_formula_index_runs/generated-test-top25 \
-      "$ASSET_ROOT/project/data/processed/pubchem_formula_index_runs/"
 
 FINGERPRINT_MODEL="data/processed/spectrum_fingerprint/prototype/spectrum_to_morgan2048.pt"
 RANKER_MODEL="data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500/lgbm_ranker.txt"
@@ -132,7 +126,6 @@ fi
 echo
 echo "Packaged asset sizes:"
 du -sh "$ASSET_ROOT/project/data/processed/pubchem_formula_index"
-du -sh "$ASSET_ROOT/project/data/processed/pubchem_formula_index_runs/generated-test-top25"
 du -sh "$ASSET_ROOT/project/data/processed/retrieval_index"
 du -sh "$ASSET_ROOT/project/data/processed/spectrum_fingerprint"
 du -sh "$ASSET_ROOT/project/data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500"
@@ -143,7 +136,7 @@ echo
 echo "Uploading Kaggle dataset version..."
 
 kaggle datasets version \
-  -m "Generated-formula prior with expanded PubChem assets" \
+  -m "Validated learned-ranker inference assets" \
   -p "$ASSET_ROOT" \
   -t \
   -r zip
