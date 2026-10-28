@@ -207,6 +207,7 @@ def build_reference_library(
     ]
 
     seen = set()
+    unique_structures = set()
     rows = []
 
     total_rows = parquet.metadata.num_rows
@@ -259,6 +260,9 @@ def build_reference_library(
                 continue
 
             seen.add(key)
+            unique_structures.add(
+                str(row.inchikey14)
+            )
 
             rows.append(
                 {
@@ -275,10 +279,7 @@ def build_reference_library(
                 }
             )
 
-            if len({
-                item["inchikey14"]
-                for item in rows
-            }) >= max_structures:
+            if len(unique_structures) >= max_structures:
                 break
 
         print(
@@ -288,10 +289,7 @@ def build_reference_library(
             flush=True,
         )
 
-        if len({
-            item["inchikey14"]
-            for item in rows
-        }) >= max_structures:
+        if len(unique_structures) >= max_structures:
             break
 
     print()
@@ -351,26 +349,41 @@ def build_mode_indexes(
         indexed = pd.DataFrame(
             [
                 {
+                    "library_row_id":
+                        int(item["id"]),
                     "inchikey14":
                         str(item["inchikey14"]),
                     "normalized_smiles":
                         str(item["normalized_smiles"]),
                     "precursor_mz":
                         float(item["precursor_mz"]),
-                    "peaks":
-                        item["peaks"],
                 }
                 for item
                 in indexed_library
             ]
         )
 
+        raw_peaks_by_id = {
+            int(index):
+                row.peaks
+            for index, row
+            in enumerate(
+                group.itertuples(
+                    index=False
+                )
+            )
+        }
+
         cosine_vectors = sparse.csr_matrix(
             np.asarray(
                 [
                     bin_spectrum(
-                        item["peaks"][:, 0],
-                        item["peaks"][:, 1],
+                        raw_peaks_by_id[
+                            int(item["id"])
+                        ][:, 0],
+                        raw_peaks_by_id[
+                            int(item["id"])
+                        ][:, 1],
                         max_mz=MAX_MZ,
                         bin_width=BIN_WIDTH,
                     )
