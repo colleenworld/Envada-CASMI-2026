@@ -9,7 +9,7 @@ import pandas as pd
 from msbuddy import Msbuddy, MsbuddyConfig
 from msbuddy.base import MetaFeature, Spectrum
 
-from casmi26.chemistry.formula_enumeration import (
+from casmi26.chemistry.inference import (
     select_query_spectra,
 )
 
