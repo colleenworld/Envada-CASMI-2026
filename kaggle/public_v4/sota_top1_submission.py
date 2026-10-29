@@ -2363,9 +2363,79 @@ def formula_of(s):
 ICE_SCORES, GL_SCORES, items, ice_fuse, gl_fuse = {}, {}, None, None, None
 TOPN, LIB_TAU = CFG['TOPN'], CFG['LIB_TAU']
 
+def _shadow_forward_pkg(src_pkg):
+    """Create a writable package view with only wheels compatible with this Python."""
+    import shutil
+    import sysconfig
+
+    src_pkg = os.path.abspath(src_pkg)
+    tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
+    dst_pkg = os.path.join(WORK, os.path.basename(src_pkg) + f"_{tag}")
+
+    if os.path.lexists(dst_pkg):
+        shutil.rmtree(dst_pkg, ignore_errors=True)
+    os.makedirs(dst_pkg, exist_ok=True)
+
+    for name in os.listdir(src_pkg):
+        src = os.path.join(src_pkg, name)
+        dst = os.path.join(dst_pkg, name)
+        if name == 'wheels':
+            continue
+        try:
+            os.symlink(src, dst, target_is_directory=os.path.isdir(src))
+        except FileExistsError:
+            pass
+
+    src_wheels = os.path.join(src_pkg, 'wheels')
+    dst_wheels = os.path.join(dst_pkg, 'wheels')
+    os.makedirs(dst_wheels, exist_ok=True)
+
+    kept, skipped = [], []
+    if os.path.isdir(src_wheels):
+        for wheel in sorted(glob.glob(os.path.join(src_wheels, '*.whl'))):
+            base = os.path.basename(wheel)
+            # Universal wheels and wheels for the current CPython are safe.
+            compatible = (
+                '-py3-' in base
+                or '-py2.py3-' in base
+                or f'-{tag}-' in base
+                or '-none-any.whl' in base
+            )
+            if compatible:
+                os.symlink(wheel, os.path.join(dst_wheels, base))
+                kept.append(base)
+            else:
+                skipped.append(base)
+
+    # The reproduction asset ships a working Kaggle CPython 3.13 RDKit wheel
+    # separately from the ICEBERG wheel bundle. Make it available to the
+    # forward-model installer after removing the stale cp312 RDKit wheel.
+    rdkit_hits = sorted(
+        glob.glob(f'/kaggle/input/**/*rdkit*{tag}*.whl', recursive=True),
+        key=len,
+    )
+    if rdkit_hits:
+        wheel = rdkit_hits[0]
+        base = os.path.basename(wheel)
+        if not os.path.exists(os.path.join(dst_wheels, base)):
+            os.symlink(wheel, os.path.join(dst_wheels, base))
+            kept.append(base)
+
+    log(
+        f'forward-model wheel shadow {dst_wheels}: '
+        f'kept {len(kept)}, skipped {len(skipped)} incompatible wheels'
+    )
+    if skipped:
+        log('forward-model incompatible wheels skipped: ' + ', '.join(skipped))
+    if rdkit_hits:
+        log('forward-model RDKit wheel: ' + os.path.basename(rdkit_hits[0]))
+
+    return dst_pkg
+
 if CFG['USE_ICE']:
     try:
         ICE_PKG = os.path.dirname(find('casmi26-iceberg/**/ice_runner.py'))
+        ICE_PKG = _shadow_forward_pkg(ICE_PKG)
         sys.path.append(ICE_PKG)
         import fuse as ice_fuse
         del V, E, bank; gc.collect(); torch.cuda.empty_cache()
