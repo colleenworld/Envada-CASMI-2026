@@ -35,20 +35,51 @@ if [ -z "$KAGGLE_USER" ]; then
   exit 1
 fi
 
-python - "$META" "$KAGGLE_USER" <<'PY'
+POPULARITY_DATASET="${CASMI26_POPULARITY_DATASET:-}"
+
+if [ -z "$POPULARITY_DATASET" ]; then
+  POPULARITY_DATASET="$(
+    kaggle datasets list -s "CASMI26 PubChem Popularity Prior" --csv 2>/dev/null \
+      | python -c 'import csv,sys
+rows=list(csv.DictReader(sys.stdin))
+for row in rows:
+    ref=(row.get("ref") or row.get("Ref") or "").strip()
+    title=(row.get("title") or row.get("Title") or "").strip().lower()
+    if ref and ("pubchem" in title and "popularity" in title and "prior" in title):
+        print(ref)
+        break'
+  )"
+fi
+
+if [ -z "$POPULARITY_DATASET" ]; then
+  echo "Could not resolve the CASMI26 PubChem Popularity Prior dataset." >&2
+  echo "Find it with: kaggle datasets list -s 'CASMI26 PubChem Popularity Prior'" >&2
+  echo "Then rerun with CASMI26_POPULARITY_DATASET=owner/dataset" >&2
+  exit 1
+fi
+
+python - "$META" "$KAGGLE_USER" "$POPULARITY_DATASET" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 username = sys.argv[2]
+popularity_dataset = sys.argv[3]
 
 meta = json.loads(path.read_text())
 meta["id"] = f"{username}/casmi26-public-v4-test"
+
+sources = list(meta.get("dataset_sources", []))
+if popularity_dataset not in sources:
+    sources.append(popularity_dataset)
+meta["dataset_sources"] = sources
+
 path.write_text(json.dumps(meta, indent=2) + "\n")
 
 print("Kernel ID:", meta["id"])
 print("Competition:", ", ".join(meta.get("competition_sources", [])))
+print("Popularity prior:", popularity_dataset)
 print("Datasets:")
 for source in meta.get("dataset_sources", []):
     print(" -", source)
