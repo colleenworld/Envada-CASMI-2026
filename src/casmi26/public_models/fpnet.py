@@ -840,11 +840,86 @@ def load_checkpoint(
         ),
     )
 
-    model.load_state_dict(
-        checkpoint[
-            "model"
-        ]
-    )
+    state = checkpoint[
+        "model"
+    ]
+
+    # Public checkpoint names follow the original Kaggle implementation:
+    # mz_emb, nl_emb, pk, prec_emb, ad, ins, gl and, inside each block,
+    # n1/o/n2/ff/drop.  The local adapter uses descriptive names, so remap
+    # only the module prefixes while preserving tensor shapes exactly.
+    prefix_map = {
+        "mz_emb.": "mz_embedding.",
+        "nl_emb.": "neutral_loss_embedding.",
+        "pk.": "peak_projection.",
+        "prec_emb.": "precursor_embedding.",
+        "ad.": "adduct_embedding.",
+        "ins.": "instrument_embedding.",
+        "gl.": "global_projection.",
+    }
+
+    block_map = {
+        ".n1.": ".norm1.",
+        ".o.": ".output.",
+        ".n2.": ".norm2.",
+        ".ff.": ".feed_forward.",
+    }
+
+    remapped = {}
+
+    for key, value in state.items():
+        mapped = key
+
+        for source, target in prefix_map.items():
+            if mapped.startswith(source):
+                mapped = (
+                    target
+                    + mapped[
+                        len(source):
+                    ]
+                )
+                break
+
+        if mapped.startswith(
+            "blocks."
+        ):
+            for source, target in block_map.items():
+                mapped = mapped.replace(
+                    source,
+                    target,
+                )
+
+        remapped[
+            mapped
+        ] = value
+
+    try:
+        model.load_state_dict(
+            remapped
+        )
+    except RuntimeError as error:
+        expected = set(
+            model.state_dict()
+        )
+        actual = set(
+            remapped
+        )
+
+        missing_keys = sorted(
+            expected
+            - actual
+        )
+        unexpected_keys = sorted(
+            actual
+            - expected
+        )
+
+        raise RuntimeError(
+            "FPNet checkpoint does not match the public adapter after "
+            "key remapping. "
+            f"Missing keys: {missing_keys[:20]}; "
+            f"unexpected keys: {unexpected_keys[:20]}"
+        ) from error
 
     model = model.to(
         device
