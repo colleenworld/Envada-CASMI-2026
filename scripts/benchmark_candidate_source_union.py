@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import pickle
 
+import numpy as np
 import pandas as pd
 
 from casmi26.pubchem.inference_asset import (
@@ -48,6 +50,18 @@ PUBLIC_V2_POOL_PATH = (
       "casmi26-v2-pool/pool_meta.parquet"
 )
 
+BIO_ROOT = (
+    PROJECT_ROOT
+    / "data/external/casmi26-public-assets/"
+      "chebi-lipidmaps-casmi26"
+)
+
+PUBCHEMLITE_ROOT = (
+    PROJECT_ROOT
+    / "data/external/casmi26-public-assets/"
+      "casmi26-pubchemlite-cc0-candidate-fingerprints"
+)
+
 OUTPUT_PATH = (
     BLIND_ROOT
     / "candidate_source_union_recall.parquet"
@@ -81,6 +95,93 @@ def pair_set(
     )
 
 
+
+def load_mass_key_bank(
+    root: Path,
+    *,
+    mass_name: str,
+    meta_name: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    mass = np.load(
+        root / mass_name,
+        mmap_mode="r",
+    )
+
+    with (root / meta_name).open("rb") as handle:
+        meta = pickle.load(handle)
+
+    keys = np.asarray(
+        meta["keys"],
+        dtype=str,
+    )
+
+    if len(mass) != len(keys):
+        raise ValueError(
+            f"Mass/key length mismatch for {root}: "
+            f"{len(mass):,} vs {len(keys):,}"
+        )
+
+    return mass, keys
+
+
+def truth_hits_by_mass_window(
+    truth: pd.DataFrame,
+    *,
+    mass: np.ndarray,
+    keys: np.ndarray,
+    ppm: float = 10.0,
+) -> set[str]:
+    hits: set[str] = set()
+
+    for row in truth.itertuples(
+        index=False
+    ):
+        neutral_mass = float(
+            row.exact_mass
+        )
+
+        tolerance = (
+            neutral_mass
+            * ppm
+            / 1_000_000.0
+        )
+
+        left = int(
+            np.searchsorted(
+                mass,
+                neutral_mass - tolerance,
+                side="left",
+            )
+        )
+
+        right = int(
+            np.searchsorted(
+                mass,
+                neutral_mass + tolerance,
+                side="right",
+            )
+        )
+
+        if right <= left:
+            continue
+
+        truth_key = str(
+            row.inchikey14
+        )
+
+        if truth_key in set(
+            keys[
+                left:right
+            ].tolist()
+        ):
+            hits.add(
+                str(
+                    row.molecule_id
+                )
+            )
+
+    return hits
+
 def main() -> None:
     for path in [
         TRUTH_PATH,
@@ -88,6 +189,10 @@ def main() -> None:
         TRAINING_STRUCTURES_PATH,
         COCONUT_PATH,
         PUBLIC_V2_POOL_PATH,
+        BIO_ROOT / "bio_mass.npy",
+        BIO_ROOT / "bio_meta.pkl",
+        PUBCHEMLITE_ROOT / "pubchemlite_mass.npy",
+        PUBCHEMLITE_ROOT / "pubchemlite_meta.pkl",
     ]:
         if not path.exists():
             raise FileNotFoundError(
@@ -95,12 +200,7 @@ def main() -> None:
             )
 
     truth = pd.read_parquet(
-        TRUTH_PATH,
-        columns=[
-            "molecule_id",
-            "molecular_formula",
-            "inchikey14",
-        ],
+        TRUTH_PATH
     ).copy()
 
     truth["molecule_id"] = (
@@ -329,6 +429,57 @@ def main() -> None:
         for pair in truth_pairs
     ]
 
+    if "exact_mass" not in truth.columns:
+        raise ValueError(
+            "Blind truth must contain exact_mass for mass-window bank recall"
+        )
+
+    bio_mass, bio_keys = load_mass_key_bank(
+        BIO_ROOT,
+        mass_name="bio_mass.npy",
+        meta_name="bio_meta.pkl",
+    )
+
+    pubchemlite_mass, pubchemlite_keys = load_mass_key_bank(
+        PUBCHEMLITE_ROOT,
+        mass_name="pubchemlite_mass.npy",
+        meta_name="pubchemlite_meta.pkl",
+    )
+
+    bio_hits = truth_hits_by_mass_window(
+        truth,
+        mass=bio_mass,
+        keys=bio_keys,
+        ppm=10.0,
+    )
+
+    pubchemlite_hits = truth_hits_by_mass_window(
+        truth,
+        mass=pubchemlite_mass,
+        keys=pubchemlite_keys,
+        ppm=10.0,
+    )
+
+    result[
+        "chebi_lipidmaps"
+    ] = (
+        result[
+            "molecule_id"
+        ].isin(
+            bio_hits
+        )
+    )
+
+    result[
+        "pubchemlite"
+    ] = (
+        result[
+            "molecule_id"
+        ].isin(
+            pubchemlite_hits
+        )
+    )
+
     # The blind pseudo-test is sampled from the competition training set.
     # Public-v2 provenance uses src=1 for training-only, src=2 for COCONUT,
     # and src=3 for structures present in both. Training-only rows are
@@ -340,6 +491,8 @@ def main() -> None:
         "coconut",
         "old_formula_pubchem",
         "public_v2_pool_external_only",
+        "chebi_lipidmaps",
+        "pubchemlite",
     ]
 
     result[
@@ -365,6 +518,8 @@ def main() -> None:
                 "coconut",
                 "old_formula_pubchem",
                 "public_v2_pool_external_only",
+                "chebi_lipidmaps",
+                "pubchemlite",
             ]
         ]
         .any(
@@ -381,6 +536,8 @@ def main() -> None:
         "old_formula_pubchem",
         "public_v2_pool_all",
         "public_v2_pool_external_only",
+        "chebi_lipidmaps",
+        "pubchemlite",
         "any_source",
         "rescued_outside_mass_tier",
     ]
