@@ -192,6 +192,14 @@ def main() -> None:
         training_structures
     )
 
+    # Keep the benchmark honest: use the same offline PubChem asset as
+    # production and allow MSBuddy-only formulas that are not covered by
+    # that asset to fall through instead of querying/building a
+    # blind-specific expansion.
+    env[
+        "CASMI26_ALLOW_PARTIAL_PUBCHEM"
+    ] = "1"
+
     test_output = (
         PROJECT_ROOT
         / "data/processed/test"
