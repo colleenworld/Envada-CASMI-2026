@@ -42,6 +42,12 @@ FORMULA_PUBCHEM_ROOT = (
     / "data/processed/pubchem_formula_index"
 )
 
+PUBLIC_V2_POOL_PATH = (
+    PROJECT_ROOT
+    / "data/external/casmi26-public-assets/"
+      "casmi26-v2-pool/pool_meta.parquet"
+)
+
 OUTPUT_PATH = (
     BLIND_ROOT
     / "candidate_source_union_recall.parquet"
@@ -81,6 +87,7 @@ def main() -> None:
         MASS_TIER_RESULT_PATH,
         TRAINING_STRUCTURES_PATH,
         COCONUT_PATH,
+        PUBLIC_V2_POOL_PATH,
     ]:
         if not path.exists():
             raise FileNotFoundError(
@@ -261,11 +268,42 @@ def main() -> None:
         for pair in truth_pairs
     ]
 
+    public_v2_pool = pd.read_parquet(
+        PUBLIC_V2_POOL_PATH,
+        columns=[
+            "formula",
+            "key",
+        ],
+    )
+
+    public_v2_pairs = set(
+        zip(
+            public_v2_pool[
+                "formula"
+            ].dropna().astype(str),
+            public_v2_pool.loc[
+                public_v2_pool[
+                    "formula"
+                ].notna(),
+                "key",
+            ].astype(str),
+            strict=True,
+        )
+    )
+
+    result[
+        "public_v2_pool"
+    ] = [
+        pair in public_v2_pairs
+        for pair in truth_pairs
+    ]
+
     source_columns = [
         "pubchem_mass_tier",
         "training_structure",
         "coconut",
         "old_formula_pubchem",
+        "public_v2_pool",
     ]
 
     result[
@@ -290,6 +328,7 @@ def main() -> None:
                 "training_structure",
                 "coconut",
                 "old_formula_pubchem",
+                "public_v2_pool",
             ]
         ]
         .any(
