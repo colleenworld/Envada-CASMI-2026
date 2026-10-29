@@ -10,7 +10,9 @@ from rdkit import Chem, DataStructs, RDLogger
 from rdkit.Chem import AllChem
 
 from casmi26.pubchem.inference_asset import (
+    available_formulas,
     load_pubchem_candidates_for_formulas,
+    load_pubchem_candidates_from_assets,
 )
 from casmi26.pubchem.neighbor_pruning import (
     score_candidates,
@@ -377,12 +379,67 @@ def main() -> None:
         "Loading formula-specific PubChem candidates..."
     )
 
-    pubchem = (
-        load_pubchem_candidates_for_formulas(
-            PUBCHEM_ASSET_ROOT,
-            formulas,
+    allow_partial_pubchem = (
+        os.environ.get(
+            "CASMI26_ALLOW_PARTIAL_PUBCHEM",
+            "",
         )
+        .strip()
+        .lower()
+        in {
+            "1",
+            "true",
+            "yes",
+        }
     )
+
+    if allow_partial_pubchem:
+        available = available_formulas(
+            PUBCHEM_ASSET_ROOT
+        )
+
+        uncovered = (
+            formulas
+            - available
+        )
+
+        print(
+            "Offline PubChem formulas covered:",
+            f"{len(formulas) - len(uncovered):,}",
+            "/",
+            f"{len(formulas):,}",
+        )
+
+        print(
+            "Offline PubChem formulas uncovered:",
+            f"{len(uncovered):,}",
+        )
+
+        if uncovered:
+            print(
+                "First uncovered formulas:",
+                sorted(
+                    uncovered
+                )[:20],
+            )
+
+        pubchem = (
+            load_pubchem_candidates_from_assets(
+                [
+                    PUBCHEM_ASSET_ROOT,
+                ],
+                formulas,
+                strict=False,
+            )
+        )
+
+    else:
+        pubchem = (
+            load_pubchem_candidates_for_formulas(
+                PUBCHEM_ASSET_ROOT,
+                formulas,
+            )
+        )
 
     pubchem = pubchem.rename(
         columns={
