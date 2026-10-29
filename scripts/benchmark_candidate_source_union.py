@@ -273,6 +273,7 @@ def main() -> None:
         columns=[
             "formula",
             "key",
+            "src",
             "train_sid",
         ],
     )
@@ -294,9 +295,9 @@ def main() -> None:
 
     public_v2_external = public_v2_pool.loc[
         public_v2_pool[
-            "train_sid"
-        ].astype(float)
-        < 0
+            "src"
+        ].astype(int)
+        .isin([2, 3])
     ].copy()
 
     public_v2_external_pairs = set(
@@ -329,10 +330,10 @@ def main() -> None:
     ]
 
     # The blind pseudo-test is sampled from the competition training set.
-    # The public pool encodes training linkage with train_sid >= 0 and uses a
-    # negative sentinel for non-training rows. Training-linked rows therefore
-    # reintroduce held-out identities and must not contribute to the
-    # leakage-safe union ceiling.
+    # Public-v2 provenance uses src=1 for training-only, src=2 for COCONUT,
+    # and src=3 for structures present in both. Training-only rows are
+    # therefore excluded, while src=2/3 rows remain valid because the
+    # structure exists independently in the external COCONUT pool.
     source_columns = [
         "pubchem_mass_tier",
         "training_structure",
