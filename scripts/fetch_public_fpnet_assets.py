@@ -45,18 +45,42 @@ def main() -> None:
     )
 
     for asset in ASSETS:
+        destination = (
+            OUTPUT
+            / asset
+        )
+
+        if destination.exists():
+            print(
+                "Already present:",
+                destination,
+            )
+            continue
+
         print(
             "Fetching:",
             asset,
         )
 
-        path = kagglehub.dataset_download(
-            DATASET,
-            path=asset,
-            output_dir=str(
-                OUTPUT
-            ),
-        )
+        try:
+            path = kagglehub.dataset_download(
+                DATASET,
+                path=asset,
+                output_dir=str(
+                    OUTPUT
+                ),
+            )
+        except FileExistsError:
+            # Directory-style assets may already have been created by a
+            # previous partial or successful download. Treat an existing
+            # destination as reusable and let the inspection step verify it.
+            if destination.exists():
+                print(
+                    "Already present:",
+                    destination,
+                )
+                continue
+            raise
 
         print(
             " ->",
