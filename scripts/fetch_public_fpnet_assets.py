@@ -26,6 +26,7 @@ ASSETS = [
     "casmi26-v2-pool/fp_bits.npy",
     "casmi26-v2-pool/pool_fp.npy",
     "casmi26-v2-pool/train_fp_sel.npy",
+    "casmi26-v4b-models",
 ]
 
 
