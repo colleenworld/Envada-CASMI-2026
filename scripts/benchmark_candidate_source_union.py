@@ -273,10 +273,11 @@ def main() -> None:
         columns=[
             "formula",
             "key",
+            "train_sid",
         ],
     )
 
-    public_v2_pairs = set(
+    public_v2_all_pairs = set(
         zip(
             public_v2_pool[
                 "formula"
@@ -291,19 +292,50 @@ def main() -> None:
         )
     )
 
+    public_v2_external = public_v2_pool.loc[
+        public_v2_pool[
+            "train_sid"
+        ].isna()
+    ].copy()
+
+    public_v2_external_pairs = set(
+        zip(
+            public_v2_external[
+                "formula"
+            ].dropna().astype(str),
+            public_v2_external.loc[
+                public_v2_external[
+                    "formula"
+                ].notna(),
+                "key",
+            ].astype(str),
+            strict=True,
+        )
+    )
+
     result[
-        "public_v2_pool"
+        "public_v2_pool_all"
     ] = [
-        pair in public_v2_pairs
+        pair in public_v2_all_pairs
         for pair in truth_pairs
     ]
 
+    result[
+        "public_v2_pool_external_only"
+    ] = [
+        pair in public_v2_external_pairs
+        for pair in truth_pairs
+    ]
+
+    # The blind pseudo-test is sampled from the competition training set.
+    # Rows with a non-null train_sid therefore reintroduce held-out identities
+    # and must not contribute to the leakage-safe union ceiling.
     source_columns = [
         "pubchem_mass_tier",
         "training_structure",
         "coconut",
         "old_formula_pubchem",
-        "public_v2_pool",
+        "public_v2_pool_external_only",
     ]
 
     result[
@@ -328,7 +360,7 @@ def main() -> None:
                 "training_structure",
                 "coconut",
                 "old_formula_pubchem",
-                "public_v2_pool",
+                "public_v2_pool_external_only",
             ]
         ]
         .any(
@@ -338,13 +370,18 @@ def main() -> None:
 
     rows = []
 
-    for column in (
-        source_columns
-        + [
-            "any_source",
-            "rescued_outside_mass_tier",
-        ]
-    ):
+    report_columns = [
+        "pubchem_mass_tier",
+        "training_structure",
+        "coconut",
+        "old_formula_pubchem",
+        "public_v2_pool_all",
+        "public_v2_pool_external_only",
+        "any_source",
+        "rescued_outside_mass_tier",
+    ]
+
+    for column in report_columns:
         hits = int(
             result[
                 column
