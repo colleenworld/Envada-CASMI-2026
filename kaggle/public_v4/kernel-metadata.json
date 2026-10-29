@@ -8,7 +8,8 @@
   "enable_gpu": "true",
   "enable_internet": "false",
   "dataset_sources": [
-    "dmitriigluzdov/casmi26-attributed-v4g-reproduction-assets"
+    "dmitriigluzdov/casmi26-attributed-v4g-reproduction-assets",
+    "ahmedberatozer/casmi26-pubchem-tier"
   ],
   "competition_sources": [
     "enveda-casmi26-molecule-id-mass-spectra"
