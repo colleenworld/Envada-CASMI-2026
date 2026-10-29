@@ -295,7 +295,8 @@ def main() -> None:
     public_v2_external = public_v2_pool.loc[
         public_v2_pool[
             "train_sid"
-        ].isna()
+        ].astype(float)
+        < 0
     ].copy()
 
     public_v2_external_pairs = set(
@@ -328,8 +329,10 @@ def main() -> None:
     ]
 
     # The blind pseudo-test is sampled from the competition training set.
-    # Rows with a non-null train_sid therefore reintroduce held-out identities
-    # and must not contribute to the leakage-safe union ceiling.
+    # The public pool encodes training linkage with train_sid >= 0 and uses a
+    # negative sentinel for non-training rows. Training-linked rows therefore
+    # reintroduce held-out identities and must not contribute to the
+    # leakage-safe union ceiling.
     source_columns = [
         "pubchem_mass_tier",
         "training_structure",
