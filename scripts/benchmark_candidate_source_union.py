@@ -125,7 +125,7 @@ def load_mass_key_bank(
 
 
 def truth_hits_by_mass_window(
-    truth: pd.DataFrame,
+    queries: pd.DataFrame,
     *,
     mass: np.ndarray,
     keys: np.ndarray,
@@ -133,12 +133,15 @@ def truth_hits_by_mass_window(
 ) -> set[str]:
     hits: set[str] = set()
 
-    for row in truth.itertuples(
+    for row in queries.itertuples(
         index=False
     ):
         neutral_mass = float(
-            row.exact_mass
+            row.neutral_mass
         )
+
+        if not np.isfinite(neutral_mass) or neutral_mass <= 0:
+            continue
 
         tolerance = (
             neutral_mass
@@ -220,6 +223,7 @@ def main() -> None:
         MASS_TIER_RESULT_PATH,
         columns=[
             "molecule_id",
+            "neutral_mass",
             "truth_present",
         ],
     ).copy()
@@ -429,11 +433,6 @@ def main() -> None:
         for pair in truth_pairs
     ]
 
-    if "exact_mass" not in truth.columns:
-        raise ValueError(
-            "Blind truth must contain exact_mass for mass-window bank recall"
-        )
-
     bio_mass, bio_keys = load_mass_key_bank(
         BIO_ROOT,
         mass_name="bio_mass.npy",
@@ -447,14 +446,14 @@ def main() -> None:
     )
 
     bio_hits = truth_hits_by_mass_window(
-        truth,
+        result,
         mass=bio_mass,
         keys=bio_keys,
         ppm=10.0,
     )
 
     pubchemlite_hits = truth_hits_by_mass_window(
-        truth,
+        result,
         mass=pubchemlite_mass,
         keys=pubchemlite_keys,
         ppm=10.0,
