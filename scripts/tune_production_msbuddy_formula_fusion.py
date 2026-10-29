@@ -806,17 +806,106 @@ def main() -> None:
     )
 
     print()
+    truth_lookup = dict(
+        zip(
+            truth["molecule_id"],
+            truth["molecular_formula"],
+            strict=True,
+        )
+    )
+
+    def source_recall_at3(
+        frame: pd.DataFrame,
+        rank_column: str,
+    ) -> float:
+        top3 = (
+            frame.loc[
+                frame[rank_column] <= 3,
+                [
+                    "molecule_id",
+                    "candidate_formula",
+                ],
+            ]
+            .groupby("molecule_id")[
+                "candidate_formula"
+            ]
+            .agg(set)
+            .to_dict()
+        )
+
+        hits = sum(
+            1
+            for molecule_id, formula
+            in truth_lookup.items()
+            if formula
+            in top3.get(
+                molecule_id,
+                set(),
+            )
+        )
+
+        return hits / len(truth_lookup)
+
+    production_recall = source_recall_at3(
+        production,
+        "production_rank",
+    )
+    msbuddy_recall = source_recall_at3(
+        msbuddy,
+        "msbuddy_rank",
+    )
+
+    production_sets = {
+        molecule_id:
+            set(group["candidate_formula"])
+        for molecule_id, group
+        in production.loc[
+            production["production_rank"] <= 3
+        ].groupby("molecule_id")
+    }
+
+    msbuddy_sets = {
+        molecule_id:
+            set(group["candidate_formula"])
+        for molecule_id, group
+        in msbuddy.loc[
+            msbuddy["msbuddy_rank"] <= 3
+        ].groupby("molecule_id")
+    }
+
+    union_hits = sum(
+        1
+        for molecule_id, formula
+        in truth_lookup.items()
+        if formula
+        in (
+            production_sets.get(
+                molecule_id,
+                set(),
+            )
+            | msbuddy_sets.get(
+                molecule_id,
+                set(),
+            )
+        )
+    )
+
+    union_recall = (
+        union_hits
+        / len(truth_lookup)
+    )
+
     print(
         "Reference single-gate all-query Top-3:"
     )
     print(
-        "  production: 85.00%"
+        f"  production: {production_recall:.2%}"
     )
     print(
-        "  MSBuddy:    81.90%"
+        f"  MSBuddy:    {msbuddy_recall:.2%}"
     )
     print(
-        "  union cap:  92.90%"
+        f"  union cap:  {union_recall:.2%}"
     )
 
     print()
