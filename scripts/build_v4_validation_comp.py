@@ -68,7 +68,6 @@ def required_columns(path: Path) -> list[str]:
     required = {
         "inchikey14",
         "normalized_smiles",
-        "spectrum_id",
         "precursor_mz",
         "adduct",
         "ionization_mode",
@@ -215,13 +214,23 @@ def main() -> None:
         .copy()
     )
 
+    validation_rows["_source_row"] = np.arange(
+        len(validation_rows),
+        dtype=np.int64,
+    )
+
+    sort_columns = [
+        "inchikey14",
+        "spectrum_id",
+    ] if "spectrum_id" in validation_rows.columns else [
+        "inchikey14",
+        "_source_row",
+    ]
+
     validation_rows = (
         validation_rows
         .sort_values(
-            [
-                "inchikey14",
-                "spectrum_id",
-            ]
+            sort_columns
         )
         .groupby(
             "inchikey14",
@@ -250,6 +259,24 @@ def main() -> None:
         "inchikey14"
     ].map(
         molecule_ids
+    )
+
+    if "spectrum_id" not in validation_rows.columns:
+        validation_rows[
+            "spectrum_id"
+        ] = [
+            f"val_spec_{i:07d}"
+            for i in range(
+                1,
+                len(validation_rows) + 1,
+            )
+        ]
+
+    validation_rows = validation_rows.drop(
+        columns=[
+            "_source_row",
+        ],
+        errors="ignore",
     )
 
     truth = selected.copy()
