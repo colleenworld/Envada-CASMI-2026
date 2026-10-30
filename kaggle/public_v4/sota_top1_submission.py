@@ -17,7 +17,7 @@ import os, sys, glob, re, subprocess, time, json, hashlib, pickle, gc
 import numpy as np, pandas as pd
 
 T0 = time.time()
-WORK = '/kaggle/working'
+WORK = os.path.abspath(os.environ.get('CASMI_WORK_DIR', '/kaggle/working'))
 STAGE = os.path.join(WORK, 'stage_cache')
 OURS = os.path.join(WORK, 'ours')
 
@@ -2130,7 +2130,13 @@ V3CODE = os.path.dirname(os.path.dirname(find('casmi26-v3-models/**/casmi/engine
 V3MOD = os.path.dirname(find('casmi26-v3-models/**/ranker_0.pkl'))
 POOL_DIR = os.path.dirname(find('pool_meta.parquet'))
 PC_DIR = os.path.dirname(find('pc_smiles.npy'))
-COMP = os.path.dirname(find('test.parquet'))
+_COMP_OVERRIDE = os.environ.get('CASMI_COMP_DIR')
+COMP = os.path.abspath(_COMP_OVERRIDE) if _COMP_OVERRIDE else os.path.dirname(find('test.parquet'))
+if _COMP_OVERRIDE:
+    for _required in ('train.parquet', 'test.parquet', 'sample_submission.csv'):
+        _path = os.path.join(COMP, _required)
+        if not os.path.exists(_path):
+            raise FileNotFoundError(f'CASMI_COMP_DIR missing required file: {_path}')
 
 # ── Fail-Safe Initial Submission Guarantee ─────────────────────────────────────
 # Guarantees /kaggle/working/submission.csv exists immediately so Kaggle NEVER rejects the version
@@ -2167,7 +2173,7 @@ json.dump(CFG, open(os.path.join(WORK, 'cfg.json'), 'w'), indent=1)
 # ── 4. Commit Run vs Scoring Rerun Switch ──────────────────────────────────────
 _te = pd.read_parquet(os.path.join(COMP, 'test.parquet'), columns=['molecule_id', 'spectrum_id'])
 _sig = hashlib.md5(','.join(sorted(_te.spectrum_id.astype(str))).encode()).hexdigest()
-IS_RERUN = bool(os.getenv('KAGGLE_IS_COMPETITION_RERUN')) or _sig != '654e030e4173780e945252b4a5adf70b'
+IS_RERUN = bool(os.getenv('KAGGLE_IS_COMPETITION_RERUN')) or bool(_COMP_OVERRIDE) or _sig != '654e030e4173780e945252b4a5adf70b'
 ICE_BUDGET = CFG['ICE_BUDGET']
 
 if not IS_RERUN and not CFG['FULL_ON_COMMIT']:
