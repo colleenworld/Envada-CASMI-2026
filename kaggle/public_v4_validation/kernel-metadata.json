@@ -1,0 +1,17 @@
+{
+  "id": "YOUR_KAGGLE_USERNAME/casmi26-public-v4-validation",
+  "title": "CASMI26 Public V4 Validation",
+  "code_file": "sota_top1_validation.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_internet": "false",
+  "dataset_sources": [
+    "dmitriigluzdov/casmi26-attributed-v4g-reproduction-assets",
+    "ahmedberatozer/casmi26-pubchem-tier"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}
