@@ -2071,10 +2071,11 @@ CFG = dict(
 
 # ── SOTA Top-1 (0.455 -> 0.500+) Plan B Master Breakthrough Overrides ─────────
 CFG.update({
-    'VERSION': 'v17-proven-sota-restored',
+    # Proven public-LB 0.420 configuration from the upstream ablation.
+    'VERSION': 'v18-proven-0420-config',
     'E2_RANK2': False,
-    'POP_MU': 0.15,
-    'FRAG_LAM': 0.0,
+    'POP_MU': 0.25,
+    'FRAG_LAM': 0.5,
     'FRAG_MODE': 'gap',
     'ICE_LAM': 1.0,
     'GL_LAM': 1.0,
@@ -2083,7 +2084,7 @@ CFG.update({
     'ICE_LAM_LIB': 0.0,
     'GL_LAM_LIB': 0.0,
     'PC_N1': 5000,
-    'PC_JOIN_N': 0,
+    'PC_JOIN_N': 50,
     'PC_JOIN_MAX_LIB': 0.7,
     'ENG_TOPK': 40,
     'FUSE_ENG_K': 40,
