@@ -1461,6 +1461,12 @@ def build_submission(base, pc, eng, ice_scores, gl_scores, cfg, mol_order, sampl
                 base_top1=base_top1,
                 pre_shield_top1=pre_shield_top1,
                 final_top1=fsm[0] if fsm else None,
+                pre_shield_top25=list(fsm[:25]) if not shielded else (
+                    [pre_shield_top1] + [x for x in fsm if x != base_top1][:24]
+                    if pre_shield_top1 is not None
+                    else []
+                ),
+                final_top25=list(fsm[:25]),
                 shielded=shielded,
             )
             stats['fuse']['top1_changed'] += int(bool(vs) and fsm[:1] != vs[:1])
