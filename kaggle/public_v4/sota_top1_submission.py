@@ -1446,7 +1446,8 @@ def build_submission(base, pc, eng, ice_scores, gl_scores, cfg, mol_order, sampl
             # HIGH-CONFIDENCE LIBRARY MATCH SHIELD:
             # Preserve the experimental library Rank 1 only above the configurable threshold.
             lib_val = lib_of.get(mid, 0.0)
-            pre_shield_top1 = fsm[0] if fsm else None
+            pre_shield_top25 = list(fsm[:25])
+            pre_shield_top1 = pre_shield_top25[0] if pre_shield_top25 else None
             base_top1 = vs[0] if vs else None
             shielded = bool(c['SHIELD_TAU'] is not None and lib_val >= c['SHIELD_TAU'] and len(vs) > 0)
             if shielded:
@@ -1461,11 +1462,7 @@ def build_submission(base, pc, eng, ice_scores, gl_scores, cfg, mol_order, sampl
                 base_top1=base_top1,
                 pre_shield_top1=pre_shield_top1,
                 final_top1=fsm[0] if fsm else None,
-                pre_shield_top25=list(fsm[:25]) if not shielded else (
-                    [pre_shield_top1] + [x for x in fsm if x != base_top1][:24]
-                    if pre_shield_top1 is not None
-                    else []
-                ),
+                pre_shield_top25=pre_shield_top25,
                 final_top25=list(fsm[:25]),
                 shielded=shielded,
             )
