@@ -1,0 +1,15 @@
+[project]
+name = "casmi26-ms2deepscore-features"
+version = "0.1.0"
+description = "Isolated MS2DeepScore feature-generation environment for CASMI 2026"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "ms2deepscore==2.11.0",
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "pyarrow>=18",
+    "rdkit>=2025.3",
+]
+
+[tool.uv]
+package = false
