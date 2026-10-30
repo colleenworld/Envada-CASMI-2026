@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -74,6 +75,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional learned-ranker output directory suffix.",
     )
+    parser.add_argument(
+        "--feature-enrichment",
+        action="append",
+        default=[],
+        type=Path,
+        help=(
+            "Optional candidate-level enrichment parquet. May be repeated. "
+            "Each file must contain inchikey14 and candidate_inchikey14; "
+            "candidate_formula is optional. All remaining numeric/bool columns "
+            "are added as model features."
+        ),
+    )
     args = parser.parse_args()
 
     if args.candidate_top_k <= 0:
@@ -117,6 +130,11 @@ def main() -> None:
     query_split_path = (
         output_dir
         / "query_split.parquet"
+    )
+
+    feature_manifest_path = (
+        output_dir
+        / "feature_columns.json"
     )
 
     for path in [
@@ -423,6 +441,123 @@ def main() -> None:
                 spectrum_fp_path,
             )
 
+    external_feature_columns: list[str] = []
+    reserved_columns = {
+        "is_truth",
+        "split",
+        "truth_present",
+    }
+
+    for enrichment_path in args.feature_enrichment:
+        if not enrichment_path.exists():
+            raise FileNotFoundError(
+                f"Missing feature enrichment: {enrichment_path}"
+            )
+
+        enrichment = pd.read_parquet(
+            enrichment_path
+        )
+
+        join_columns = [
+            "inchikey14",
+            "candidate_inchikey14",
+        ]
+
+        if "candidate_formula" in enrichment.columns:
+            join_columns.append(
+                "candidate_formula"
+            )
+
+        missing_keys = (
+            set(join_columns)
+            - set(enrichment.columns)
+        )
+
+        if missing_keys:
+            raise ValueError(
+                f"Feature enrichment {enrichment_path} is missing keys: "
+                f"{sorted(missing_keys)}"
+            )
+
+        candidate_columns = [
+            column
+            for column
+            in enrichment.columns
+            if column not in join_columns
+        ]
+
+        forbidden = (
+            set(candidate_columns)
+            & reserved_columns
+        )
+
+        if forbidden:
+            raise ValueError(
+                f"Feature enrichment {enrichment_path} contains reserved "
+                f"columns: {sorted(forbidden)}"
+            )
+
+        collisions = (
+            set(candidate_columns)
+            & set(features.columns)
+        )
+
+        if collisions:
+            raise ValueError(
+                f"Feature enrichment {enrichment_path} collides with existing "
+                f"columns: {sorted(collisions)}"
+            )
+
+        usable_columns: list[str] = []
+
+        for column in candidate_columns:
+            series = enrichment[column]
+
+            if pd.api.types.is_bool_dtype(series.dtype):
+                usable_columns.append(column)
+                continue
+
+            if pd.api.types.is_numeric_dtype(series.dtype):
+                usable_columns.append(column)
+                continue
+
+            raise TypeError(
+                f"Feature enrichment {enrichment_path} column {column!r} "
+                f"must be numeric or bool, got {series.dtype}"
+            )
+
+        if not usable_columns:
+            raise ValueError(
+                f"Feature enrichment {enrichment_path} has no usable features"
+            )
+
+        enrichment = enrichment[
+            [
+                *join_columns,
+                *usable_columns,
+            ]
+        ].drop_duplicates(
+            subset=join_columns
+        )
+
+        features = features.merge(
+            enrichment,
+            on=join_columns,
+            how="left",
+            validate="one_to_one",
+        )
+
+        external_feature_columns.extend(
+            usable_columns
+        )
+
+        print(
+            "Merged feature enrichment:",
+            enrichment_path,
+            "features:",
+            len(usable_columns),
+        )
+
     if features[
         "formula_support_count"
     ].isna().any():
@@ -705,6 +840,53 @@ def main() -> None:
         validate="many_to_one",
     )
 
+    model_feature_columns = [
+        "formula_rank",
+        "mass_error_best_abs_ppm",
+        "formula_support_count",
+        "formula_support_fraction",
+        "prior_rank",
+        "neighbor_prior_score",
+        "usable_neighbor_fingerprints",
+        "query_candidate_count",
+        "formula_candidate_count",
+        "coconut_np_likeness",
+        "in_full_coconut",
+        "in_approved_coconut",
+        "log_query_candidate_count",
+        "log_formula_candidate_count",
+        "inverse_prior_rank",
+        "inverse_formula_rank",
+        *[
+            column
+            for column
+            in NEIGHBOR_ENRICHMENT_COLUMNS
+            if column in features.columns
+        ],
+        *[
+            column
+            for column
+            in SPECTRUM_FINGERPRINT_COLUMNS
+            if column in features.columns
+        ],
+        *external_feature_columns,
+    ]
+
+    feature_manifest_path.write_text(
+        json.dumps(
+            {
+                "feature_columns": model_feature_columns,
+                "external_enrichments": [
+                    str(path)
+                    for path
+                    in args.feature_enrichment
+                ],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
     features.to_parquet(
         output_path,
         index=False,
@@ -789,6 +971,10 @@ def main() -> None:
     print(
         "Wrote:",
         query_split_path,
+    )
+    print(
+        "Wrote:",
+        feature_manifest_path,
     )
 
 
