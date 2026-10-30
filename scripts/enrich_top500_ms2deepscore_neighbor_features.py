@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -640,10 +641,37 @@ def main() -> None:
         f"{len(spectra):,} spectra",
     )
 
+    embedding_signature = inspect.signature(
+        scorer.get_embedding_array
+    )
+
+    embedding_kwargs = {}
+
+    if (
+        "batch_size"
+        in embedding_signature.parameters
+    ):
+        embedding_kwargs[
+            "batch_size"
+        ] = EMBED_BATCH_SIZE
+
+    if (
+        "progress_bar"
+        in embedding_signature.parameters
+    ):
+        embedding_kwargs[
+            "progress_bar"
+        ] = True
+
+    print(
+        "MS2DeepScore get_embedding_array signature:",
+        embedding_signature,
+    )
+
     embeddings = (
         scorer.get_embedding_array(
             spectra,
-            batch_size=EMBED_BATCH_SIZE,
+            **embedding_kwargs,
         )
     )
 
