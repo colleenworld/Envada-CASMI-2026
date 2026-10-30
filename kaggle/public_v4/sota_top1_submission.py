@@ -1217,7 +1217,7 @@ DEFAULTS = dict(LIB_TAU=0.9, REL_TH=600.0, SLOTS_AGG=[2, 4, 6, 8, 10], SLOTS_GEN
  POP_MU=0.0, FUSE_ENG_K=40, FRAG_LAM=0.0, FRAG_MODE='all',
  POST_ICE_LAM=None, POST_GL_LAM=None, FUSE_SKIP_LIB=None,
  ICE_LAM_LIB=None, GL_LAM_LIB=None, FILL_25=False,
- POP_LIB_OFF=False, FRAG_LIB_OFF=False, GATE_TAU=None, FUSE_MIN_LIB=None,
+ POP_LIB_OFF=False, FRAG_LIB_OFF=False, GATE_TAU=None, FUSE_MIN_LIB=None, SHIELD_TAU=0.88,
  PC_FWD_T1=None, PC_FWD_N=25)
 
 def popularity_reorder(smis, keys, scs, forms, pids, pool_pop, mu):
@@ -1274,7 +1274,7 @@ def build_submission(base, pc, eng, ice_scores, gl_scores, cfg, mol_order, sampl
     eng = eng or {}; ice_scores = ice_scores or {}; gl_scores = gl_scores or {}
     ICE_LAM, GL_LAM, TOPN, LIB_TAU = c['ICE_LAM'], c['GL_LAM'], c['TOPN'], c['LIB_TAU']
     stats = dict(ice=dict(molecules=0, changed_top25=0, changed_top1=0), gl=dict(molecules=0),
-     merge=dict(untouched=0, gentle=0, aggressive=0, no_pc=0), fuse=dict(top1_changed=0, ice_reordered=0))
+     merge=dict(untouched=0, gentle=0, aggressive=0, no_pc=0), fuse=dict(top1_changed=0, ice_reordered=0), molecules={})
 
     def gl_of(m):
         g = gl_scores.get(str(m), {}) if isinstance(gl_scores, dict) else {}
@@ -1444,15 +1444,25 @@ def build_submission(base, pc, eng, ice_scores, gl_scores, cfg, mol_order, sampl
                 except Exception as ex:
                     log('fused frag rerank failed', mid, repr(ex))
             # HIGH-CONFIDENCE LIBRARY MATCH SHIELD:
-            # If lib_max >= 0.88, protect the experimental library match at Rank 1 from forward model noise
+            # Preserve the experimental library Rank 1 only above the configurable threshold.
             lib_val = lib_of.get(mid, 0.0)
-            if lib_val >= 0.88 and len(vs) > 0:
+            pre_shield_top1 = fsm[0] if fsm else None
+            base_top1 = vs[0] if vs else None
+            shielded = bool(c['SHIELD_TAU'] is not None and lib_val >= c['SHIELD_TAU'] and len(vs) > 0)
+            if shielded:
                 top_lib = vs[0]
                 if top_lib in fsm:
                     fsm.remove(top_lib)
                 fsm.insert(0, top_lib)
                 stats['fuse']['shielded'] = stats['fuse'].get('shielded', 0) + 1
 
+            stats['molecules'][str(mid)] = dict(
+                lib_max=float(lib_val),
+                base_top1=base_top1,
+                pre_shield_top1=pre_shield_top1,
+                final_top1=fsm[0] if fsm else None,
+                shielded=shielded,
+            )
             stats['fuse']['top1_changed'] += int(bool(vs) and fsm[:1] != vs[:1])
             vs = fsm[:25]
         # Disabled destructive post-hoc rank2 hijacking: forward models determine true rank2
@@ -2050,6 +2060,7 @@ CFG = dict(
     FRAG_LIB_OFF=False,
     GATE_TAU=None,
     FUSE_MIN_LIB=None,
+    SHIELD_TAU=0.88,
     PC_FWD_T1=None,
     PC_FWD_N=25,
     # --- validation mode
