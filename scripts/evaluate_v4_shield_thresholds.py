@@ -216,17 +216,29 @@ def library_band(
 
 def apply_threshold(
     pre_shield: list[str],
-    final_shielded: list[str],
+    base_top1_smiles: object,
     lib_max: float,
     threshold: float | None,
 ) -> list[str]:
-    if threshold is None:
+    """
+    Reconstruct the shielded ranking for any threshold.
+
+    Do not reuse final_top25 from the recorded run: that ranking only
+    reflects the threshold configured for that run (0.88 by default).
+    """
+    if threshold is None or lib_max < threshold:
         return pre_shield
 
-    if lib_max >= threshold:
-        return final_shielded
+    base_top1 = structure_key(base_top1_smiles)
+    if base_top1 is None:
+        return pre_shield
 
-    return pre_shield
+    # Match the production shield: move the library's original rank-1
+    # candidate to the front, retaining the prior order for all others.
+    return [
+        base_top1,
+        *[key for key in pre_shield if key != base_top1][:24],
+    ]
 
 
 def threshold_label(
@@ -377,6 +389,7 @@ def main() -> None:
                 [],
             )
         )
+        base_top1_smiles = info.get("base_top1")
 
         lib_max = float(
             info.get(
@@ -418,7 +431,7 @@ def main() -> None:
         for threshold in DEFAULT_THRESHOLDS:
             ranking = apply_threshold(
                 pre,
-                final,
+                base_top1_smiles,
                 lib_max,
                 threshold,
             )
