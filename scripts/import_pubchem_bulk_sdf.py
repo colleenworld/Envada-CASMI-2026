@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -26,38 +27,76 @@ DEFAULT_FORMULA_SET = (
     "training_coconut_formulas.parquet"
 )
 
-OUTPUT_ROOT = (
-    PROJECT_ROOT
-    / "data/processed/pubchem_bulk"
-)
+RUN_NAME = os.environ.get(
+    "CASMI26_PUBCHEM_RUN_NAME",
+    "",
+).strip()
 
-CHUNK_RESULT_DIR = (
-    OUTPUT_ROOT
-    / "chunks"
-)
+if RUN_NAME:
+    OUTPUT_ROOT = (
+        PROJECT_ROOT
+        / "data/processed/pubchem_bulk_runs"
+        / RUN_NAME
+    )
 
-STATE_PATH = (
-    OUTPUT_ROOT
-    / "state.json"
-)
+    CHUNK_RESULT_DIR = (
+        OUTPUT_ROOT
+        / "chunks"
+    )
 
-FINAL_CANDIDATES_PATH = (
-    PROJECT_ROOT
-    / "data/processed/diagnostics/"
-    "pubchem_formula_index_candidates.parquet"
-)
+    STATE_PATH = (
+        OUTPUT_ROOT
+        / "state.json"
+    )
 
-FINAL_BURDEN_PATH = (
-    PROJECT_ROOT
-    / "data/processed/diagnostics/"
-    "pubchem_formula_index_candidates_burden.parquet"
-)
+    FINAL_CANDIDATES_PATH = (
+        OUTPUT_ROOT
+        / "candidates.parquet"
+    )
 
-FINAL_SUMMARY_PATH = (
-    PROJECT_ROOT
-    / "data/processed/diagnostics/"
-    "pubchem_formula_index_candidates_summary.json"
-)
+    FINAL_BURDEN_PATH = (
+        OUTPUT_ROOT
+        / "burden.parquet"
+    )
+
+    FINAL_SUMMARY_PATH = (
+        OUTPUT_ROOT
+        / "summary.json"
+    )
+
+else:
+    OUTPUT_ROOT = (
+        PROJECT_ROOT
+        / "data/processed/pubchem_bulk"
+    )
+
+    CHUNK_RESULT_DIR = (
+        OUTPUT_ROOT
+        / "chunks"
+    )
+
+    STATE_PATH = (
+        OUTPUT_ROOT
+        / "state.json"
+    )
+
+    FINAL_CANDIDATES_PATH = (
+        PROJECT_ROOT
+        / "data/processed/diagnostics/"
+        "pubchem_formula_index_candidates.parquet"
+    )
+
+    FINAL_BURDEN_PATH = (
+        PROJECT_ROOT
+        / "data/processed/diagnostics/"
+        "pubchem_formula_index_candidates_burden.parquet"
+    )
+
+    FINAL_SUMMARY_PATH = (
+        PROJECT_ROOT
+        / "data/processed/diagnostics/"
+        "pubchem_formula_index_candidates_summary.json"
+    )
 
 PUBCHEM_SDF_INDEX = (
     "https://ftp.ncbi.nlm.nih.gov/pubchem/"
@@ -474,6 +513,16 @@ def main() -> None:
     print(
         "Target formula file:",
         args.formula_set,
+    )
+
+    print(
+        "Named run:",
+        RUN_NAME or "(default)",
+    )
+
+    print(
+        "Run output root:",
+        OUTPUT_ROOT,
     )
     print(
         "Target formulas:",

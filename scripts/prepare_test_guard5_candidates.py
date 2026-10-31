@@ -10,7 +10,9 @@ from rdkit import Chem, DataStructs, RDLogger
 from rdkit.Chem import AllChem
 
 from casmi26.pubchem.inference_asset import (
+    available_formulas,
     load_pubchem_candidates_for_formulas,
+    load_pubchem_candidates_from_assets,
 )
 from casmi26.pubchem.neighbor_pruning import (
     score_candidates,
@@ -50,14 +52,18 @@ PUBCHEM_ASSET_ROOT = (
     / "data/processed/pubchem_formula_index"
 )
 
-RETRIEVAL_INDEX_DIR = (
-    PROJECT_ROOT
-    / "data/processed/retrieval_index"
+RETRIEVAL_INDEX_DIR = Path(
+    os.environ.get(
+        "CASMI26_RETRIEVAL_INDEX_DIR",
+        PROJECT_ROOT / "data/processed/retrieval_index",
+    )
 )
 
-STRUCTURES_PATH = (
-    PROJECT_ROOT
-    / "data/processed/structure_index/structures.parquet"
+STRUCTURES_PATH = Path(
+    os.environ.get(
+        "CASMI26_STRUCTURES_PATH",
+        PROJECT_ROOT / "data/processed/structure_index/structures.parquet",
+    )
 )
 
 COCONUT_PATH = (
@@ -200,7 +206,36 @@ def top_structure_neighbors(
     ]
 
 
+def load_excluded_structure_keys() -> set[str]:
+    path = os.environ.get(
+        "CASMI26_EXCLUDED_STRUCTURE_KEYS_PATH",
+        "",
+    ).strip()
+
+    if not path:
+        return set()
+
+    frame = pd.read_parquet(
+        Path(path),
+        columns=["inchikey14"],
+    )
+
+    return set(
+        frame["inchikey14"]
+        .dropna()
+        .astype(str)
+    )
+
+
 def main() -> None:
+    excluded_structure_keys = load_excluded_structure_keys()
+
+    if excluded_structure_keys:
+        print(
+            "Excluded reference structures:",
+            f"{len(excluded_structure_keys):,}",
+        )
+
     hypotheses = pd.read_parquet(
         HYPOTHESES_PATH
     )
@@ -257,31 +292,54 @@ def main() -> None:
         )
     ].copy()
 
-    # Keep only the top three formula hypotheses per molecule, matching
-    # the large validation result. Hypotheses are ranked by best absolute
-    # mass error, with formula as a deterministic tie-breaker.
-    positive = (
-        positive
-        .sort_values(
-            [
+    # Generated hypotheses are already ranked by the validated
+    # training-derived formula prior. Preserve that order when available;
+    # otherwise retain the legacy mass-error ranking.
+    if "formula_rank" in positive.columns:
+        positive = (
+            positive
+            .sort_values(
+                [
+                    "molecule_id",
+                    "formula_rank",
+                    "candidate_formula",
+                ],
+                ascending=[
+                    True,
+                    True,
+                    True,
+                ],
+                kind="stable",
+            )
+            .reset_index(
+                drop=True
+            )
+        )
+    else:
+        positive = (
+            positive
+            .sort_values(
+                [
+                    "molecule_id",
+                    "min_abs_mass_error_ppm",
+                    "candidate_formula",
+                ],
+                ascending=[
+                    True,
+                    True,
+                    True,
+                ],
+                kind="stable",
+            )
+            .groupby(
                 "molecule_id",
-                "min_abs_mass_error_ppm",
-                "candidate_formula",
-            ],
-            ascending=[
-                True,
-                True,
-                True,
-            ],
-            kind="stable",
+                sort=False,
+            )
+            .head(3)
+            .reset_index(
+                drop=True
+            )
         )
-        .groupby(
-            "molecule_id",
-            sort=False,
-        )
-        .head(3)
-        .reset_index(drop=True)
-    )
 
     if positive.empty:
         raise RuntimeError(
@@ -321,12 +379,67 @@ def main() -> None:
         "Loading formula-specific PubChem candidates..."
     )
 
-    pubchem = (
-        load_pubchem_candidates_for_formulas(
-            PUBCHEM_ASSET_ROOT,
-            formulas,
+    allow_partial_pubchem = (
+        os.environ.get(
+            "CASMI26_ALLOW_PARTIAL_PUBCHEM",
+            "",
         )
+        .strip()
+        .lower()
+        in {
+            "1",
+            "true",
+            "yes",
+        }
     )
+
+    if allow_partial_pubchem:
+        available = available_formulas(
+            PUBCHEM_ASSET_ROOT
+        )
+
+        uncovered = (
+            formulas
+            - available
+        )
+
+        print(
+            "Offline PubChem formulas covered:",
+            f"{len(formulas) - len(uncovered):,}",
+            "/",
+            f"{len(formulas):,}",
+        )
+
+        print(
+            "Offline PubChem formulas uncovered:",
+            f"{len(uncovered):,}",
+        )
+
+        if uncovered:
+            print(
+                "First uncovered formulas:",
+                sorted(
+                    uncovered
+                )[:20],
+            )
+
+        pubchem = (
+            load_pubchem_candidates_from_assets(
+                [
+                    PUBCHEM_ASSET_ROOT,
+                ],
+                formulas,
+                strict=False,
+            )
+        )
+
+    else:
+        pubchem = (
+            load_pubchem_candidates_for_formulas(
+                PUBCHEM_ASSET_ROOT,
+                formulas,
+            )
+        )
 
     pubchem = pubchem.rename(
         columns={
@@ -361,6 +474,13 @@ def main() -> None:
             "molecular_formula",
         ],
     )
+
+    if excluded_structure_keys:
+        structures_all = structures_all.loc[
+            ~structures_all["inchikey14"]
+            .astype(str)
+            .isin(excluded_structure_keys)
+        ].copy()
 
     training = structures_all.loc[
         structures_all[
@@ -568,6 +688,14 @@ def main() -> None:
         .to_numpy()
         == "positive"
     )
+
+    if excluded_structure_keys:
+        mode_mask &= ~(
+            metadata["inchikey14"]
+            .astype(str)
+            .isin(excluded_structure_keys)
+            .to_numpy()
+        )
 
     mode_indices = np.flatnonzero(
         mode_mask

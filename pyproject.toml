@@ -8,7 +8,11 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "kagglehub>=0.3.13",
     "lightgbm>=4.7.0",
+    "ms-entropy>=1.5.3",
+    "ms2deepscore==2.11.0",
+    "msbuddy==0.3.16",
     "numpy>=2.5.3",
     "pandas>=3.0.6",
     "pyarrow>=25.0.1",
@@ -25,3 +29,7 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "casmi26"
+
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

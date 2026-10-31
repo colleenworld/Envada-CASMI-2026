@@ -147,14 +147,20 @@ def main() -> None:
         exist_ok=True,
     )
 
-    shutil.copy2(
-        test_path,
-        raw_dir / "test.parquet",
-    )
-    shutil.copy2(
-        sample_path,
-        raw_dir / "sample_submission.csv",
-    )
+    target_test_path = raw_dir / "test.parquet"
+    target_sample_path = raw_dir / "sample_submission.csv"
+
+    if test_path != target_test_path.resolve():
+        shutil.copy2(
+            test_path,
+            target_test_path,
+        )
+
+    if sample_path != target_sample_path.resolve():
+        shutil.copy2(
+            sample_path,
+            target_sample_path,
+        )
 
     test_output = (
         project_root
@@ -186,11 +192,9 @@ def main() -> None:
         mist_root
     )
 
-    python = str(
-        Path(
-            sys.executable
-        ).resolve()
-    )
+    # Preserve the virtual-environment interpreter path.
+    # Resolving a venv symlink can fall back to the system interpreter.
+    python = sys.executable
 
     env[
         "MIST_PYTHON"
