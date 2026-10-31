@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ROOT="${CASMI26_PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+PROJECT_ROOT="${CASMI26_PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 KERNEL_DIR="$PROJECT_ROOT/kaggle/public_v4_validation"
 META="$KERNEL_DIR/kernel-metadata.json"
 KAGGLE_USER="${KAGGLE_USERNAME:-ColleenDavis}"
