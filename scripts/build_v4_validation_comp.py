@@ -63,9 +63,11 @@ def required_columns(path: Path) -> list[str]:
         "collision_energy_ev",
         "instrument_type",
         "molecular_formula",
+        "ingest_lib",
     ]
 
     required = {
+        "ingest_lib",
         "inchikey14",
         "normalized_smiles",
         "precursor_mz",
