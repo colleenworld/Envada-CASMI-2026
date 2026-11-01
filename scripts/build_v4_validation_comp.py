@@ -56,23 +56,34 @@ def required_columns(path: Path) -> list[str]:
         "normalized_smiles",
         "spectrum_id",
         "precursor_mz",
+        "precursor_error_ppm",
         "adduct",
         "ionization_mode",
         "ms2_mzs",
         "ms2_normalized_intensities",
         "collision_energy_ev",
+        "collision_energy_orig_units",
         "instrument_type",
+        "base_peak_intensity",
+        "num_peaks",
         "molecular_formula",
         "ingest_lib",
     ]
 
+    # casmi.build.build_spec_cache() reads these exact source fields.
     required = {
-        "ingest_lib",
         "inchikey14",
         "normalized_smiles",
-        "precursor_mz",
+        "ingest_lib",
+        "instrument_type",
         "adduct",
         "ionization_mode",
+        "precursor_mz",
+        "precursor_error_ppm",
+        "collision_energy_ev",
+        "collision_energy_orig_units",
+        "base_peak_intensity",
+        "num_peaks",
         "ms2_mzs",
         "ms2_normalized_intensities",
     }
@@ -187,6 +198,30 @@ def main() -> None:
         args.train,
         columns=columns,
     )
+
+    expected_ingest_libs = {
+        "enveda-180",
+        "pluskal_ms2",
+        "riken",
+        "gnps",
+        "massbank",
+        "mona",
+        "spectraverse",
+        "msdial",
+        "drug_plus",
+        "enveda-np-examples",
+        "masaryk",
+    }
+    ingest_lib = train["ingest_lib"]
+    actual_ingest_libs = set(ingest_lib.dropna().astype(str).unique())
+    unknown_ingest_libs = sorted(actual_ingest_libs - expected_ingest_libs)
+    missing_ingest_libs = int(ingest_lib.isna().sum())
+    if unknown_ingest_libs or missing_ingest_libs:
+        raise ValueError(
+            "Training data has ingest_lib values unsupported by the v4 "
+            f"spec-cache builder: unknown={unknown_ingest_libs}, "
+            f"missing={missing_ingest_libs:,}"
+        )
 
     train["inchikey14"] = (
         train["inchikey14"]
