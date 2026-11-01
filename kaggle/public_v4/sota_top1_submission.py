@@ -1217,7 +1217,7 @@ DEFAULTS = dict(LIB_TAU=0.9, REL_TH=600.0, SLOTS_AGG=[2, 4, 6, 8, 10], SLOTS_GEN
  POP_MU=0.0, FUSE_ENG_K=40, FRAG_LAM=0.0, FRAG_MODE='all',
  POST_ICE_LAM=None, POST_GL_LAM=None, FUSE_SKIP_LIB=None,
  ICE_LAM_LIB=None, GL_LAM_LIB=None, FILL_25=False,
- POP_LIB_OFF=False, FRAG_LIB_OFF=False, GATE_TAU=None, FUSE_MIN_LIB=None, SHIELD_TAU=0.88,
+ POP_LIB_OFF=False, FRAG_LIB_OFF=False, GATE_TAU=None, FUSE_MIN_LIB=None, SHIELD_TAU=0.80,
  PC_FWD_T1=None, PC_FWD_N=25)
 
 def popularity_reorder(smis, keys, scs, forms, pids, pool_pop, mu):
@@ -2063,7 +2063,7 @@ CFG = dict(
     FRAG_LIB_OFF=False,
     GATE_TAU=None,
     FUSE_MIN_LIB=None,
-    SHIELD_TAU=0.88,
+    SHIELD_TAU=0.80,
     PC_FWD_T1=None,
     PC_FWD_N=25,
     # --- validation mode
