@@ -1,5 +1,5 @@
 {
-  "id": "YOUR_KAGGLE_USERNAME/casmi26-public-v4-validation",
+  "id": "ColleenDavis/casmi26-public-v4-validation",
   "title": "CASMI26 Public V4 Validation",
   "code_file": "sota_top1_validation.py",
   "language": "python",
@@ -9,7 +9,9 @@
   "enable_internet": "false",
   "dataset_sources": [
     "dmitriigluzdov/casmi26-attributed-v4g-reproduction-assets",
-    "ahmedberatozer/casmi26-pubchem-tier"
+    "ahmedberatozer/casmi26-pubchem-tier",
+    "ColleenDavis/casmi26-v4-validation-split",
+    "dmitriigluzdov/casmi26-pubchem-popularity-prior"
   ],
   "competition_sources": [],
   "kernel_sources": [],
