@@ -37,6 +37,26 @@ if len(_validation_dirs) != 1:
 os.environ['CASMI_COMP_DIR'] = _validation_dirs[0]
 os.environ['KAGGLE_IS_COMPETITION_RERUN'] = '1'
 print('V4 validation competition directory:', _validation_dirs[0], flush=True)
+
+# Fail fast on the exact training schema required by casmi.build.build_spec_cache.
+import pyarrow.parquet as _pq
+_validation_train = os.path.join(_validation_dirs[0], 'train.parquet')
+_validation_train_columns = set(_pq.ParquetFile(_validation_train).schema_arrow.names)
+_validation_spec_cache_columns = {
+    'inchikey14', 'ingest_lib', 'instrument_type', 'adduct',
+    'ionization_mode', 'precursor_mz', 'precursor_error_ppm',
+    'collision_energy_ev', 'collision_energy_orig_units',
+    'base_peak_intensity', 'num_peaks', 'ms2_mzs',
+    'ms2_normalized_intensities',
+}
+_validation_missing = sorted(_validation_spec_cache_columns - _validation_train_columns)
+if _validation_missing:
+    raise RuntimeError(
+        'Validation train.parquet is missing columns required by '
+        'casmi.build.build_spec_cache: ' + ', '.join(_validation_missing)
+    )
+print('Validation train schema OK for v4 spec cache', flush=True)
+
 import numpy as np, pandas as pd
 
 T0 = time.time()
