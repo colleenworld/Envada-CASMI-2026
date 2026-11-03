@@ -276,7 +276,7 @@ def main() -> None:
                 [
                     python,
                     "-c",
-                    "import msbuddy; print('MSBuddy:', getattr(msbuddy, '__version__', 'installed'))",
+                    "from importlib.metadata import version; actual = version('msbuddy'); print('MSBuddy:', actual); assert actual == '0.3.16', f'Expected msbuddy==0.3.16, got {actual}'",
                 ],
                 cwd=project_root,
                 env=env,
