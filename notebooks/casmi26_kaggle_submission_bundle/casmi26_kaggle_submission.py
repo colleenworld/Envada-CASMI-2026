@@ -1,49 +1,64 @@
-
 # %% [markdown]
 # # CASMI 2026 — Frozen inference submission
-# 
+#
 # This notebook is an **offline Kaggle submission entry point** for the frozen CASMI26 pipeline developed locally.
-# 
+#
 # It intentionally does **not** tune ranking parameters on the Kaggle test set. It runs:
-# 
+#
 # 1. multi-spectrum formula candidate generation;
 # 2. MIST-compatible positive-ion preprocessing;
 # 3. positive-ion MIST contrastive ranking;
 # 4. same-polarity neutral-mass-filtered spectral retrieval for negative-only molecules;
 # 5. final validation and `/kaggle/working/submission.csv` creation.
-# 
+#
 # The competition reruns this notebook against a hidden replacement for `test.parquet`, so the notebook must recompute predictions rather than copy a locally generated submission.
+#
 
 # %% [markdown]
 # ## Required Kaggle inputs
-# 
-# Attach the competition data plus one dataset containing a frozen snapshot of the local inference assets.
-# 
-# Expected asset contents:
-# 
+#
+# Attach the competition data plus one dataset containing the frozen inference assets.
+#
+# The project snapshot must include the Phase 2 pipeline files and these assets:
+#
 # ```text
 # project/
 #   scripts/
+#     run_kaggle_guard5_inference.py
 #     build_test_multispectrum_formula_hypotheses.py
-#     export_test_mist_inputs.py
-#     build_test_contrastive_candidates.py
-#     rank_test_positive_contrastive.py
+#     build_test_msbuddy_fused_formula_hypotheses.py
+#     prepare_test_guard5_candidates.py
+#     score_test_guard5_spectrum_fingerprint.py
+#     build_test_learned_ranker_features.py
+#     rank_test_learned_ranker.py
 #     rank_test_negative_retrieval.py
 #     build_submission.py
 #   src/casmi26/
-#   data/processed/formula_index/
-#   data/processed/structure_index/
-#   data/processed/retrieval_index/
-#   data/external/coconut/
-# 
+#   data/processed/
+#     formula_index/
+#     structure_index/
+#     retrieval_index/
+#     pubchem_formula_index/
+#     spectrum_fingerprint/prototype/spectrum_to_morgan2048.pt
+#     diagnostics/large_validation_audit/true_formula_neighbor_benchmark/
+#       learned_ranker_top500/lgbm_ranker.txt
+#   data/external/
+#     coconut/
+#     casmi26-public-assets/
+#       pubchem_tier__pc_mass.npy
+#       pubchem_tier__pc_off.npy
+#       pubchem_tier__pc_smiles.npy
+#
 # MIST/
 #   src/mist/
 #   pretrained_models/mist_contrastive_canopus_pretrain.ckpt
+#   ../wheelhouse/
 # ```
-# 
-# If MIST needs packages not present in Kaggle's base image, include an offline `wheelhouse/` in the same dataset.
-# 
-# **Important:** this notebook assumes the source snapshot already contains the final frozen scripts used locally.
+#
+# The offline wheelhouse beside the MIST folder must contain `msbuddy==0.3.16` and the required runtime wheels (including RDKit if it is not already available).
+#
+# The notebook retains the original 0.403 workflow as a reproducible fallback. The Phase 2 path is selected by default below.
+#
 
 # %%
 from pathlib import Path
@@ -116,16 +131,16 @@ print("Sample rows:", len(pd.read_csv(raw_dir / "sample_submission.csv")))
 
 # %% [markdown]
 # ## Optional offline dependency install
-# 
+#
 # Keep internet disabled. If the attached assets contain a `wheelhouse/`, this cell installs from it only.
+#
 
 # %%
-wheelhouses = [p for p in KAGGLE_INPUT.rglob("wheelhouse") if p.is_dir()]
+WHEELHOUSE = MIST_SOURCE.parent / "wheelhouse"
 
-if wheelhouses:
-    WHEELHOUSE = wheelhouses[0]
+if WHEELHOUSE.is_dir():
     print("Using offline wheelhouse:", WHEELHOUSE)
-    wheels = list(WHEELHOUSE.glob("*.whl"))
+    wheels = sorted(WHEELHOUSE.glob("*.whl"))
     print("Wheel count:", len(wheels))
     if wheels:
         subprocess.run(
@@ -137,7 +152,7 @@ if wheelhouses:
             check=True,
         )
 else:
-    print("No offline wheelhouse found; using Kaggle base packages.")
+    print("No offline wheelhouse found beside MIST; the selected pipeline may fail if dependencies are absent.")
 
 # %%
 os.environ["PYTHONPATH"] = os.pathsep.join(
@@ -185,165 +200,208 @@ PIPELINE_ENV = {
 }
 
 # %% [markdown]
-# ## 1. Build test formula hypotheses
+# ## Phase 2: production formula fusion and expanded candidates
+#
+# This runs the repository's production inference runner. It applies the frozen MSBuddy formula fusion settings and PubChem mass-tier candidate source, then uses the existing Morgan-4096/MIST/COCONUT ranking pipeline. It does not tune on the Kaggle test set.
+#
+# Set `USE_PHASE2_GUARD5 = False` to reproduce the original notebook workflow that produced the 0.403 baseline.
+#
 
 # %%
-run(
-    [PYTHON, "scripts/build_test_multispectrum_formula_hypotheses.py"],
-    env=PIPELINE_ENV,
-)
+USE_PHASE2_GUARD5 = True
+
+if USE_PHASE2_GUARD5:
+    command = [
+        PYTHON,
+        "scripts/run_kaggle_guard5_inference.py",
+        "--project-root", str(WORK_ROOT),
+        "--mist-root", str(MIST_SOURCE),
+        "--test-path", str(TEST_SOURCE),
+        "--sample-submission-path", str(SAMPLE_SOURCE),
+        "--phase2",
+    ]
+    run(command, env=PIPELINE_ENV)
+
+    project_submission = WORK_ROOT / "submission.csv"
+    final_submission = WORKING / "submission.csv"
+    if not project_submission.exists():
+        raise FileNotFoundError(project_submission)
+    shutil.copy2(project_submission, final_submission)
+    print("Phase 2 submission copied to:", final_submission)
 
 # %% [markdown]
-# ## 2. Export MIST test inputs
+# ## Legacy baseline pipeline: original 0.403 workflow
+#
+# These cells are retained unchanged in behavior for reproduction. They run only when `USE_PHASE2_GUARD5 = False`.
+#
 
 # %%
-run(
-    [PYTHON, "scripts/export_test_mist_inputs.py"],
-    env=PIPELINE_ENV,
-)
-
-# %% [markdown]
-# ## 3. Keep only MIST-supported positive-ion hypotheses
-# 
-# The pretrained checkpoint is positive-ion only. `[M+NH4]+` is remapped to MIST's internal `[M+H3N+H]+`. Negative-only molecules are handled later by the frozen spectral-retrieval fallback.
-
-# %%
-root = WORK_ROOT / "data/processed/test"
-
-hyp = pd.read_parquet(root / "multispectrum_formula_hypotheses.parquet")
-labels = pd.read_csv(root / "mist/test_multiformula_labels.tsv", sep="\t")
-
-supported_adducts = {
-    "[M+H]+",
-    "[M+Na]+",
-    "[M+NH4]+",
-    "[M+K]+",
-}
-
-supported_specs = set(
-    hyp.loc[
-        hyp["selected_adduct"].isin(supported_adducts),
-        "hypothesis_spec",
-    ].astype(str)
-)
-
-filtered = labels[
-    labels["spec"].astype(str).isin(supported_specs)
-].copy()
-
-filtered["ionization"] = filtered["ionization"].replace(
-    {"[M+NH4]+": "[M+H3N+H]+"}
-)
-
-labels_positive = root / "mist/test_multiformula_labels_mist_supported.tsv"
-filtered.to_csv(labels_positive, sep="\t", index=False)
-
-supported_molecules = hyp.loc[
-    hyp["hypothesis_spec"].isin(filtered["spec"]),
-    "molecule_id",
-].nunique()
-
-print("Original hypotheses:", len(labels))
-print("MIST-supported hypotheses:", len(filtered))
-print("Molecules represented:", supported_molecules)
-print(filtered["ionization"].value_counts().to_string())
-
-# %% [markdown]
-# ## 4. Generate positive-ion subformula assignments
-
-# %%
-subforms_positive = root / "mist/subforms_positive"
-if subforms_positive.exists():
-    shutil.rmtree(subforms_positive)
-
-run(
-    [
-        MIST_PYTHON,
-        str(MIST_SOURCE / "src/mist/subformulae/assign_subformulae.py"),
-        "--spec-files", str(root / "mist/test_multiformula.mgf"),
-        "--labels-file", str(labels_positive),
-        "--output-dir", str(subforms_positive),
-        "--feature-id", "FEATURE_ID",
-        "--num-workers", "0",
-    ],
-    cwd=MIST_SOURCE,
-)
-
-json_count = len(list(subforms_positive.glob("*.json")))
-print("Positive subformula JSON files:", json_count)
-assert json_count == len(filtered)
-
-# %% [markdown]
-# ## 5. Build the full test-time structure candidate universe
-
-# %%
-run(
-    [PYTHON, "scripts/build_test_contrastive_candidates.py"],
-    env=PIPELINE_ENV,
-)
-
-h5_files = list(
-    (root / "contrastive_retrieval").glob("*morgan4096*retrieval_db.h5")
-)
-if len(h5_files) != 1:
-    raise RuntimeError(
-        f"Expected one Morgan-4096 retrieval HDF, found {h5_files}"
+if not USE_PHASE2_GUARD5:
+    run(
+        [PYTHON, "scripts/build_test_multispectrum_formula_hypotheses.py"],
+        env=PIPELINE_ENV,
     )
 
-HDF_PATH = h5_files[0]
-print("Contrastive HDF:", HDF_PATH)
-
 # %% [markdown]
-# ## 6. Positive-ion contrastive MIST retrieval
+# ## Legacy baseline — 2. Export MIST test inputs
 
 # %%
-positive_predictions = root / "contrastive_predictions_positive"
-if positive_predictions.exists():
-    shutil.rmtree(positive_predictions)
-
-checkpoint = MIST_SOURCE / "pretrained_models/mist_contrastive_canopus_pretrain.ckpt"
-if not checkpoint.exists():
-    raise FileNotFoundError(checkpoint)
-
-run(
-    [
-        MIST_PYTHON,
-        str(MIST_SOURCE / "src/mist/retrieval_contrast.py"),
-        "--model-ckpt", str(checkpoint),
-        "--dataset-name", "casmi_test_positive_contrastive",
-        "--labels-file", str(labels_positive),
-        "--subform-folder", str(subforms_positive),
-        "--hdf-file", str(HDF_PATH),
-        "--save-dir", str(positive_predictions),
-        "--dist-name", "cosine",
-        "--num-workers", "0",
-        "--top-k", "500",
-    ],
-    cwd=MIST_SOURCE,
-)
+if not USE_PHASE2_GUARD5:
+    run(
+        [PYTHON, "scripts/export_test_mist_inputs.py"],
+        env=PIPELINE_ENV,
+    )
 
 # %% [markdown]
-# ## 7. Rank positive-ion candidates
+# ## Legacy baseline — 3. Keep only MIST-supported positive-ion hypotheses
+#
+# The pretrained checkpoint is positive-ion only. `[M+NH4]+` is remapped to MIST's internal `[M+H3N+H]+`. Negative-only molecules are handled later by the frozen spectral-retrieval fallback.
+#
 
 # %%
-run(
-    [PYTHON, "scripts/rank_test_positive_contrastive.py"],
-    env=PIPELINE_ENV,
-)
+if not USE_PHASE2_GUARD5:
+    root = WORK_ROOT / "data/processed/test"
+    
+    hyp = pd.read_parquet(root / "multispectrum_formula_hypotheses.parquet")
+    labels = pd.read_csv(root / "mist/test_multiformula_labels.tsv", sep="\t")
+    
+    supported_adducts = {
+        "[M+H]+",
+        "[M+Na]+",
+        "[M+NH4]+",
+        "[M+K]+",
+    }
+    
+    supported_specs = set(
+        hyp.loc[
+            hyp["selected_adduct"].isin(supported_adducts),
+            "hypothesis_spec",
+        ].astype(str)
+    )
+    
+    filtered = labels[
+        labels["spec"].astype(str).isin(supported_specs)
+    ].copy()
+    
+    filtered["ionization"] = filtered["ionization"].replace(
+        {"[M+NH4]+": "[M+H3N+H]+"}
+    )
+    
+    labels_positive = root / "mist/test_multiformula_labels_mist_supported.tsv"
+    filtered.to_csv(labels_positive, sep="\t", index=False)
+    
+    supported_molecules = hyp.loc[
+        hyp["hypothesis_spec"].isin(filtered["spec"]),
+        "molecule_id",
+    ].nunique()
+    
+    print("Original hypotheses:", len(labels))
+    print("MIST-supported hypotheses:", len(filtered))
+    print("Molecules represented:", supported_molecules)
+    print(filtered["ionization"].value_counts().to_string())
 
 # %% [markdown]
-# ## 8. Rank negative-only molecules with frozen spectral retrieval
-# 
+# ## Legacy baseline — 4. Generate positive-ion subformula assignments
+
+# %%
+if not USE_PHASE2_GUARD5:
+    subforms_positive = root / "mist/subforms_positive"
+    if subforms_positive.exists():
+        shutil.rmtree(subforms_positive)
+    
+    run(
+        [
+            MIST_PYTHON,
+            str(MIST_SOURCE / "src/mist/subformulae/assign_subformulae.py"),
+            "--spec-files", str(root / "mist/test_multiformula.mgf"),
+            "--labels-file", str(labels_positive),
+            "--output-dir", str(subforms_positive),
+            "--feature-id", "FEATURE_ID",
+            "--num-workers", "0",
+        ],
+        cwd=MIST_SOURCE,
+    )
+    
+    json_count = len(list(subforms_positive.glob("*.json")))
+    print("Positive subformula JSON files:", json_count)
+    assert json_count == len(filtered)
+
+# %% [markdown]
+# ## Legacy baseline — 5. Build the full test-time structure candidate universe
+
+# %%
+if not USE_PHASE2_GUARD5:
+    run(
+        [PYTHON, "scripts/build_test_contrastive_candidates.py"],
+        env=PIPELINE_ENV,
+    )
+    
+    h5_files = list(
+        (root / "contrastive_retrieval").glob("*morgan4096*retrieval_db.h5")
+    )
+    if len(h5_files) != 1:
+        raise RuntimeError(
+            f"Expected one Morgan-4096 retrieval HDF, found {h5_files}"
+        )
+    
+    HDF_PATH = h5_files[0]
+    print("Contrastive HDF:", HDF_PATH)
+
+# %% [markdown]
+# ## Legacy baseline — 6. Positive-ion contrastive MIST retrieval
+
+# %%
+if not USE_PHASE2_GUARD5:
+    positive_predictions = root / "contrastive_predictions_positive"
+    if positive_predictions.exists():
+        shutil.rmtree(positive_predictions)
+    
+    checkpoint = MIST_SOURCE / "pretrained_models/mist_contrastive_canopus_pretrain.ckpt"
+    if not checkpoint.exists():
+        raise FileNotFoundError(checkpoint)
+    
+    run(
+        [
+            MIST_PYTHON,
+            str(MIST_SOURCE / "src/mist/retrieval_contrast.py"),
+            "--model-ckpt", str(checkpoint),
+            "--dataset-name", "casmi_test_positive_contrastive",
+            "--labels-file", str(labels_positive),
+            "--subform-folder", str(subforms_positive),
+            "--hdf-file", str(HDF_PATH),
+            "--save-dir", str(positive_predictions),
+            "--dist-name", "cosine",
+            "--num-workers", "0",
+            "--top-k", "500",
+        ],
+        cwd=MIST_SOURCE,
+    )
+
+# %% [markdown]
+# ## Legacy baseline — 7. Rank positive-ion candidates
+
+# %%
+if not USE_PHASE2_GUARD5:
+    run(
+        [PYTHON, "scripts/rank_test_positive_contrastive.py"],
+        env=PIPELINE_ENV,
+    )
+
+# %% [markdown]
+# ## Legacy baseline — 8. Rank negative-only molecules with frozen spectral retrieval
+#
 # This branch uses same-polarity retrieval with neutral-mass filtering at ±0.01 Da, falling back to unrestricted same-negative-mode cosine only if no mass-filtered candidates exist.
+#
 
 # %%
-run(
-    [PYTHON, "scripts/rank_test_negative_retrieval.py"],
-    env=PIPELINE_ENV,
-)
+if not USE_PHASE2_GUARD5:
+    run(
+        [PYTHON, "scripts/rank_test_negative_retrieval.py"],
+        env=PIPELINE_ENV,
+    )
 
 # %% [markdown]
-# ## 9. Assemble `submission.csv`
+# ## Legacy baseline — 9. Assemble `submission.csv`
 
 # %%
 run(
@@ -361,33 +419,28 @@ print("Submission copied to:", final_submission)
 # ## 10. Final Kaggle-format validation
 
 # %%
-submission = pd.read_csv(WORKING / "submission.csv")
-sample = pd.read_csv(raw_dir / "sample_submission.csv")
+## Commit / submit checklist
 
-assert list(submission.columns) == ["molecule_id", "smiles"]
-assert len(submission) == len(sample)
-assert submission["molecule_id"].is_unique
-assert submission["smiles"].notna().all()
-assert submission["molecule_id"].tolist() == sample["molecule_id"].astype(str).tolist()
+Before the final Kaggle commit:
 
-candidate_counts = submission["smiles"].str.split(";").str.len()
-assert candidate_counts.between(1, 25).all()
-
-print("Rows:", len(submission))
-print("Unique molecule IDs:", submission["molecule_id"].nunique())
-print("Candidate-count distribution:")
-print(candidate_counts.describe().to_string())
-print()
-print("submission.csv is ready at /kaggle/working/submission.csv")
+- Internet: **Off**
+- Runtime: **under 9 hours**
+- Competition dataset attached
+- Updated inference-assets dataset attached (including the three PubChem mass-tier arrays and the learned-ranker/model assets listed above)
+- Offline wheelhouse beside MIST includes **msbuddy==0.3.16**
+- `USE_PHASE2_GUARD5 = True` for the Phase 2 pipeline; set it to `False` only to reproduce the original 0.403 notebook workflow
+- `/kaggle/working/submission.csv` produced and validated successfully
+- Do not use a precomputed visible-test submission: Kaggle replaces `test.parquet` during the hidden rerun
 
 # %% [markdown]
 # ## Commit / submit checklist
-# 
+#
 # Before the final Kaggle commit:
-# 
+#
 # - Internet: **Off**
 # - Runtime: **under 9 hours**
 # - Competition dataset attached
 # - Frozen inference-assets dataset attached
 # - `/kaggle/working/submission.csv` produced successfully
 # - Do not use a precomputed visible-test submission: Kaggle replaces `test.parquet` during the hidden rerun
+#
