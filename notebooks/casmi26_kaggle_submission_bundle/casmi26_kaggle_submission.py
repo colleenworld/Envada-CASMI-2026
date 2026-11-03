@@ -1,17 +1,18 @@
 # %% [markdown]
-# # CASMI 2026 — Frozen inference submission
+# # CASMI 2026 — Kaggle inference submission
 #
-# This notebook is an **offline Kaggle submission entry point** for the frozen CASMI26 pipeline developed locally.
+# This is the offline Kaggle entry point for the CASMI26 inference project.
 #
-# It intentionally does **not** tune ranking parameters on the Kaggle test set. It runs:
+# By default it runs the Phase 2 production pipeline:
+# 1. frozen production + MSBuddy formula fusion;
+# 2. formula-specific candidate retrieval augmented with the PubChem mass-tier asset;
+# 3. Morgan-4096 structural-neighbor and spectrum-fingerprint scoring;
+# 4. the frozen learned ranker and negative-mode retrieval fallback;
+# 5. submission assembly and Kaggle-format validation.
 #
-# 1. multi-spectrum formula candidate generation;
-# 2. MIST-compatible positive-ion preprocessing;
-# 3. positive-ion MIST contrastive ranking;
-# 4. same-polarity neutral-mass-filtered spectral retrieval for negative-only molecules;
-# 5. final validation and `/kaggle/working/submission.csv` creation.
+# The original notebook workflow that produced the 0.403 baseline remains available as a fallback. Set `USE_PHASE2_GUARD5 = False` to run that original sequence instead.
 #
-# The competition reruns this notebook against a hidden replacement for `test.parquet`, so the notebook must recompute predictions rather than copy a locally generated submission.
+# The competition reruns this notebook against a hidden replacement for `test.parquet`, so predictions must be recomputed from the attached inference assets.
 #
 
 # %% [markdown]
@@ -130,9 +131,9 @@ print("Hidden test rows:", len(pd.read_parquet(raw_dir / "test.parquet")))
 print("Sample rows:", len(pd.read_csv(raw_dir / "sample_submission.csv")))
 
 # %% [markdown]
-# ## Optional offline dependency install
+# ## Offline dependency install
 #
-# Keep internet disabled. If the attached assets contain a `wheelhouse/`, this cell installs from it only.
+# Keep internet disabled. The Phase 2 runner uses the wheelhouse beside the discovered MIST folder and requires **msbuddy==0.3.16**. This cell installs the local wheelhouse for the legacy baseline path as well; the Phase 2 runner also performs its own offline dependency setup and version check.
 #
 
 # %%
