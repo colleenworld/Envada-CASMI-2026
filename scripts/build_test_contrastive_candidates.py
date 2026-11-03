@@ -1,8 +1,13 @@
 from pathlib import Path
+import os
 import pickle
 import sys
 
 import pandas as pd
+
+from casmi26.pubchem.mass_tier_candidates import (
+    load_mass_tier_candidates,
+)
 
 
 PROJECT_ROOT = Path(
@@ -10,7 +15,10 @@ PROJECT_ROOT = Path(
 )
 
 MIST_ROOT = Path(
-    "/home/colleen/PycharmProjects/MIST"
+    os.environ.get(
+        "MIST_ROOT",
+        "/home/colleen/PycharmProjects/MIST",
+    )
 )
 
 TEST_ROOT = (
@@ -18,9 +26,11 @@ TEST_ROOT = (
     / "data/processed/test"
 )
 
-HYPOTHESES_PATH = (
-    TEST_ROOT
-    / "multispectrum_formula_hypotheses.parquet"
+HYPOTHESES_PATH = Path(
+    os.environ.get(
+        "CASMI26_FORMULA_HYPOTHESES_PATH",
+        TEST_ROOT / "multispectrum_formula_hypotheses.parquet",
+    )
 )
 
 LABELS_PATH = (
@@ -192,7 +202,7 @@ def build_structure_catalog():
         )
     )
 
-    return catalog
+    return catalog, conflicts
 
 
 def main():
@@ -264,12 +274,68 @@ def main():
     #
     # Frozen training + approved COCONUT catalog.
     #
-    catalog = build_structure_catalog()
+    catalog, conflicting_structure_keys = build_structure_catalog()
+    catalog["in_pubchem_mass_tier"] = False
 
     print(
-        "Catalog structures:",
+        "Training + COCONUT catalog structures:",
         len(catalog),
     )
+
+    use_mass_tier = (
+        os.environ.get(
+            "CASMI26_USE_PUBCHEM_MASS_TIER",
+            "0",
+        ).strip().lower()
+        in {"1", "true", "yes"}
+    )
+
+    if use_mass_tier:
+        mass_tier_root = Path(
+            os.environ.get(
+                "CASMI26_PUBCHEM_MASS_TIER_ROOT",
+                PROJECT_ROOT / "data/external/casmi26-public-assets",
+            )
+        )
+        requested_formulas = set(
+            hypotheses["candidate_formula"]
+            .dropna()
+            .astype(str)
+        )
+        excluded_keys = (
+            set(catalog["inchikey14"].astype(str))
+            | {str(key) for key in conflicting_structure_keys}
+        )
+        mass_tier_candidates, mass_tier_stats = load_mass_tier_candidates(
+            requested_formulas,
+            mass_tier_root,
+            ppm=10.0,
+            excluded_structure_keys=excluded_keys,
+        )
+        print(
+            "PubChem mass-tier scan:",
+            mass_tier_stats,
+        )
+        if not mass_tier_candidates.empty:
+            mass_tier_candidates = mass_tier_candidates.rename(
+                columns={
+                    "candidate_formula": "molecular_formula",
+                    "candidate_inchikey14": "inchikey14",
+                    "candidate_smiles": "normalized_smiles",
+                }
+            )
+            mass_tier_candidates["in_training"] = False
+            mass_tier_candidates["in_coconut"] = False
+            mass_tier_candidates["in_pubchem_mass_tier"] = True
+            catalog = pd.concat(
+                [catalog, mass_tier_candidates],
+                ignore_index=True,
+                sort=False,
+            )
+        print(
+            "PubChem mass-tier structures added:",
+            int(catalog["in_pubchem_mass_tier"].sum()),
+        )
 
     print(
         "Training structures:",
@@ -299,6 +365,7 @@ def main():
             "molecular_formula",
             "in_training",
             "in_coconut",
+            "in_pubchem_mass_tier",
         ]
     ].rename(
         columns={

@@ -19,9 +19,11 @@ TEST_ROOT = (
     / "data/processed/test"
 )
 
-HYPOTHESES_PATH = (
-    TEST_ROOT
-    / "multispectrum_formula_hypotheses.parquet"
+HYPOTHESES_PATH = Path(
+    os.environ.get(
+        "CASMI26_FORMULA_HYPOTHESES_PATH",
+        TEST_ROOT / "multispectrum_formula_hypotheses.parquet",
+    )
 )
 
 PREDICTIONS_PATH = (

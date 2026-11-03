@@ -55,6 +55,11 @@ OUTPUT_PATH = (
     / "learned_ranker_top500/neighbor_enrichment.parquet"
 )
 
+SPECTRAL_NEIGHBORS_PATH = (
+    ROOT
+    / "learned_ranker_top500/spectral_neighbors.parquet"
+)
+
 RDLogger.DisableLog("rdApp.*")
 
 
@@ -472,6 +477,37 @@ def main() -> None:
         )
 
         del score_matrix
+
+    spectral_neighbor_rows = []
+
+    for query_key, benchmark_id in benchmark_id_by_key.items():
+        for rank, (neighbor_key, spectral_score) in enumerate(
+            neighbors_by_id.get(int(benchmark_id), []),
+            start=1,
+        ):
+            spectral_neighbor_rows.append(
+                {
+                    "inchikey14": str(query_key),
+                    "neighbor_inchikey14": str(neighbor_key),
+                    "spectral_neighbor_rank": int(rank),
+                    "spectral_neighbor_score": float(spectral_score),
+                }
+            )
+
+    spectral_neighbors = pd.DataFrame(
+        spectral_neighbor_rows
+    )
+
+    SPECTRAL_NEIGHBORS_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    spectral_neighbors.to_parquet(
+        SPECTRAL_NEIGHBORS_PATH,
+        index=False,
+        compression="zstd",
+    )
 
     neighbor_keys = {
         key
@@ -1129,6 +1165,10 @@ def main() -> None:
     print(
         "Wrote:",
         OUTPUT_PATH,
+    )
+    print(
+        "Wrote:",
+        SPECTRAL_NEIGHBORS_PATH,
     )
 
 

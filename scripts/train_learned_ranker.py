@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import lightgbm as lgb
@@ -383,6 +384,85 @@ def rank_penalty_3(
     return ranked
 
 
+def mrr25_eval(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    weight: np.ndarray | None = None,
+    group: np.ndarray | None = None,
+) -> tuple[str, float, bool]:
+    if group is None:
+        raise ValueError(
+            "MRR@25 evaluation requires LightGBM query groups"
+        )
+
+    start = 0
+    scores: list[float] = []
+
+    for size in np.asarray(
+        group,
+        dtype=np.int64,
+    ):
+        stop = start + int(size)
+        labels = np.asarray(
+            y_true[start:stop],
+            dtype=np.int8,
+        )
+        predictions = np.asarray(
+            y_pred[start:stop],
+            dtype=float,
+        )
+
+        truth = np.flatnonzero(
+            labels > 0
+        )
+
+        if len(truth) == 0:
+            scores.append(0.0)
+            start = stop
+            continue
+
+        order = np.argsort(
+            -predictions,
+            kind="stable",
+        )
+
+        positions = np.flatnonzero(
+            np.isin(
+                order,
+                truth,
+            )
+        )
+
+        if len(positions) == 0:
+            scores.append(0.0)
+        else:
+            rank = int(
+                positions[0]
+            ) + 1
+            scores.append(
+                1.0 / rank
+                if rank <= 25
+                else 0.0
+            )
+
+        start = stop
+
+    if start != len(y_true):
+        raise ValueError(
+            "LightGBM group sizes do not sum to evaluation rows"
+        )
+
+    return (
+        "mrr25",
+        float(
+            np.mean(
+                scores
+            )
+        ),
+        True,
+    )
+
+
 def main() -> None:
     args = parse_args()
 
@@ -408,6 +488,11 @@ def main() -> None:
         / "holdout_summary.csv"
     )
 
+    feature_manifest_path = (
+        root
+        / "feature_columns.json"
+    )
+
     if not features_path.exists():
         raise FileNotFoundError(
             "Missing learned-ranker dataset. Run "
@@ -418,21 +503,31 @@ def main() -> None:
         features_path
     )
 
-    feature_columns = [
-        *BASE_FEATURE_COLUMNS,
-        *[
-            column
-            for column
-            in OPTIONAL_NEIGHBOR_FEATURE_COLUMNS
-            if column in frame.columns
-        ],
-        *[
-            column
-            for column
-            in OPTIONAL_SPECTRUM_FINGERPRINT_COLUMNS
-            if column in frame.columns
-        ],
-    ]
+    if feature_manifest_path.exists():
+        feature_manifest = json.loads(
+            feature_manifest_path.read_text()
+        )
+        feature_columns = list(
+            feature_manifest[
+                "feature_columns"
+            ]
+        )
+    else:
+        feature_columns = [
+            *BASE_FEATURE_COLUMNS,
+            *[
+                column
+                for column
+                in OPTIONAL_NEIGHBOR_FEATURE_COLUMNS
+                if column in frame.columns
+            ],
+            *[
+                column
+                for column
+                in OPTIONAL_SPECTRUM_FINGERPRINT_COLUMNS
+                if column in frame.columns
+            ],
+        ]
 
     print(
         "Using features:",
@@ -459,6 +554,17 @@ def main() -> None:
         raise ValueError(
             "Ranker dataset is missing columns: "
             f"{sorted(missing)}"
+        )
+
+    missing_features = (
+        set(feature_columns)
+        - set(frame.columns)
+    )
+
+    if missing_features:
+        raise ValueError(
+            "Feature manifest references missing columns: "
+            f"{sorted(missing_features)}"
         )
 
     train_queries = (
@@ -633,6 +739,10 @@ def main() -> None:
             5,
             10,
             25,
+        ],
+        eval_metric=[
+            "ndcg",
+            mrr25_eval,
         ],
         callbacks=[
             lgb.early_stopping(

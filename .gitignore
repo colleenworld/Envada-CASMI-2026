@@ -1,2 +1,11 @@
 /data/
-/kaggle/
+/**/__pycache__/
+/.idea/
+/.kaggle/
+/.ruff_cache/
+/.venv/
+/kaggle_output/
+/kaggle_output/*
+*.csv
+*.lock
+.python-version

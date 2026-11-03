@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -11,27 +12,61 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-SOURCE_CHUNK_DIR = (
-    PROJECT_ROOT
-    / "data/processed/pubchem_bulk/chunks"
-)
+RUN_NAME = os.environ.get(
+    "CASMI26_PUBCHEM_RUN_NAME",
+    "",
+).strip()
 
-SOURCE_BURDEN = (
-    PROJECT_ROOT
-    / "data/processed/diagnostics/"
-    "pubchem_formula_index_candidates_burden.parquet"
-)
+if RUN_NAME:
+    SOURCE_ROOT = (
+        PROJECT_ROOT
+        / "data/processed/pubchem_bulk_runs"
+        / RUN_NAME
+    )
 
-SOURCE_SUMMARY = (
-    PROJECT_ROOT
-    / "data/processed/diagnostics/"
-    "pubchem_formula_index_candidates_summary.json"
-)
+    SOURCE_CHUNK_DIR = (
+        SOURCE_ROOT
+        / "chunks"
+    )
 
-OUTPUT_ROOT = (
-    PROJECT_ROOT
-    / "data/processed/pubchem_formula_index"
-)
+    SOURCE_BURDEN = (
+        SOURCE_ROOT
+        / "burden.parquet"
+    )
+
+    SOURCE_SUMMARY = (
+        SOURCE_ROOT
+        / "summary.json"
+    )
+
+    OUTPUT_ROOT = (
+        PROJECT_ROOT
+        / "data/processed/pubchem_formula_index_runs"
+        / RUN_NAME
+    )
+
+else:
+    SOURCE_CHUNK_DIR = (
+        PROJECT_ROOT
+        / "data/processed/pubchem_bulk/chunks"
+    )
+
+    SOURCE_BURDEN = (
+        PROJECT_ROOT
+        / "data/processed/diagnostics/"
+        "pubchem_formula_index_candidates_burden.parquet"
+    )
+
+    SOURCE_SUMMARY = (
+        PROJECT_ROOT
+        / "data/processed/diagnostics/"
+        "pubchem_formula_index_candidates_summary.json"
+    )
+
+    OUTPUT_ROOT = (
+        PROJECT_ROOT
+        / "data/processed/pubchem_formula_index"
+    )
 
 CANDIDATE_DIR = OUTPUT_ROOT / "candidates"
 BURDEN_PATH = OUTPUT_ROOT / "burden.parquet"
@@ -207,6 +242,14 @@ def main() -> None:
 
     print(
         "Partitioning PubChem bulk chunk results..."
+    )
+    print(
+        "Named run:",
+        RUN_NAME or "(default)",
+    )
+    print(
+        "Output root:",
+        OUTPUT_ROOT,
     )
     print(
         "Source chunks:",
