@@ -404,33 +404,40 @@ if not USE_PHASE2_GUARD5:
 # ## Legacy baseline — 9. Assemble `submission.csv`
 
 # %%
-run(
-    [PYTHON, "scripts/build_submission.py"],
-    env=PIPELINE_ENV,
-)
-
-project_submission = WORK_ROOT / "submission.csv"
-final_submission = WORKING / "submission.csv"
-shutil.copy2(project_submission, final_submission)
-
-print("Submission copied to:", final_submission)
+if not USE_PHASE2_GUARD5:
+    run(
+        [PYTHON, "scripts/build_submission.py"],
+        env=PIPELINE_ENV,
+    )
+    
+    project_submission = WORK_ROOT / "submission.csv"
+    final_submission = WORKING / "submission.csv"
+    shutil.copy2(project_submission, final_submission)
+    
+    print("Submission copied to:", final_submission)
 
 # %% [markdown]
 # ## 10. Final Kaggle-format validation
 
 # %%
-## Commit / submit checklist
+submission = pd.read_csv(WORKING / "submission.csv")
+sample = pd.read_csv(raw_dir / "sample_submission.csv")
 
-Before the final Kaggle commit:
+assert list(submission.columns) == ["molecule_id", "smiles"]
+assert len(submission) == len(sample)
+assert submission["molecule_id"].is_unique
+assert submission["smiles"].notna().all()
+assert submission["molecule_id"].tolist() == sample["molecule_id"].astype(str).tolist()
 
-- Internet: **Off**
-- Runtime: **under 9 hours**
-- Competition dataset attached
-- Updated inference-assets dataset attached (including the three PubChem mass-tier arrays and the learned-ranker/model assets listed above)
-- Offline wheelhouse beside MIST includes **msbuddy==0.3.16**
-- `USE_PHASE2_GUARD5 = True` for the Phase 2 pipeline; set it to `False` only to reproduce the original 0.403 notebook workflow
-- `/kaggle/working/submission.csv` produced and validated successfully
-- Do not use a precomputed visible-test submission: Kaggle replaces `test.parquet` during the hidden rerun
+candidate_counts = submission["smiles"].str.split(";").str.len()
+assert candidate_counts.between(1, 25).all()
+
+print("Rows:", len(submission))
+print("Unique molecule IDs:", submission["molecule_id"].nunique())
+print("Candidate-count distribution:")
+print(candidate_counts.describe().to_string())
+print()
+print("submission.csv is ready at /kaggle/working/submission.csv")
 
 # %% [markdown]
 # ## Commit / submit checklist
@@ -440,7 +447,9 @@ Before the final Kaggle commit:
 # - Internet: **Off**
 # - Runtime: **under 9 hours**
 # - Competition dataset attached
-# - Frozen inference-assets dataset attached
-# - `/kaggle/working/submission.csv` produced successfully
+# - Updated inference-assets dataset attached (including the three PubChem mass-tier arrays and the learned-ranker/model assets listed above)
+# - Offline wheelhouse beside MIST includes **msbuddy==0.3.16**
+# - `USE_PHASE2_GUARD5 = True` for the Phase 2 pipeline; set it to `False` only to reproduce the original 0.403 notebook workflow
+# - `/kaggle/working/submission.csv` produced and validated successfully
 # - Do not use a precomputed visible-test submission: Kaggle replaces `test.parquet` during the hidden rerun
 #
