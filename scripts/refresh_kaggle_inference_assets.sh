@@ -176,7 +176,7 @@ if [[ -z "$BRAIN_WHEEL" ]]; then
       \"\$TARGET_PYTHON\" -m pip wheel --no-deps --wheel-dir /tmp/brain-wheel /wheelhouse/$(basename "$BRAIN_SDIST")
       auditwheel repair --plat '${KAGGLE_MANYLINUX_PLATFORM}' --wheel-dir /wheelhouse /tmp/brain-wheel/brain_isotopic_distribution-*.whl
       \"\$TARGET_PYTHON\" -m pip install --no-deps --no-index --find-links /wheelhouse brain-isotopic-distribution
-      \"\$TARGET_PYTHON\" -c 'from brainpy import isotopic_variants; peaks = isotopic_variants({"C": 6, "H": 12, "O": 6}, npeaks=3); assert len(peaks) == 3; print("brainpy smoke test passed")'
+      \"\$TARGET_PYTHON\" -c 'from brainpy import isotopic_variants; peaks = isotopic_variants({\"C\": 6, \"H\": 12, \"O\": 6}, npeaks=3); assert len(peaks) == 3; print(\"brainpy smoke test passed\")'
     "
   rm -f "$BRAIN_SDIST"
 fi
