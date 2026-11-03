@@ -203,6 +203,7 @@ BRAIN_WHEEL="$(find "$WHEELHOUSE" -maxdepth 1 -type f \
   "msbuddy==0.3.16" \
   lightgbm
 
+MSBUDDY_WHEEL="$(find "$WHEELHOUSE" -maxdepth 1 -type f -name 'msbuddy-0.3.16-*.whl' -print -quit)"
 [[ -n "$MSBUDDY_WHEEL" ]] || fail "MSBuddy 0.3.16 wheel was not downloaded"
 
 echo
