@@ -73,6 +73,7 @@ import pandas as pd
 KAGGLE_INPUT = Path("/kaggle/input")
 WORKING = Path("/kaggle/working")
 WORK_ROOT = WORKING / "casmi26"
+USE_PHASE2_GUARD5 = True
 
 print("Python:", sys.version)
 print("Executable:", sys.executable)
@@ -140,10 +141,12 @@ print("Sample rows:", len(pd.read_csv(raw_dir / "sample_submission.csv")))
 WHEELHOUSE = MIST_SOURCE.parent / "wheelhouse"
 
 if WHEELHOUSE.is_dir():
-    print("Using offline wheelhouse:", WHEELHOUSE)
+    print("Offline wheelhouse:", WHEELHOUSE)
     wheels = sorted(WHEELHOUSE.glob("*.whl"))
     print("Wheel count:", len(wheels))
-    if wheels:
+    if USE_PHASE2_GUARD5:
+        print("The Phase 2 runner installs this wheelhouse immediately before inference.")
+    elif wheels:
         subprocess.run(
             [
                 sys.executable, "-m", "pip", "install",
@@ -153,7 +156,7 @@ if WHEELHOUSE.is_dir():
             check=True,
         )
 else:
-    print("No offline wheelhouse found beside MIST; the selected pipeline may fail if dependencies are absent.")
+    print("No offline wheelhouse found beside MIST; required packages must already be installed.")
 
 # %%
 os.environ["PYTHONPATH"] = os.pathsep.join(
@@ -209,8 +212,6 @@ PIPELINE_ENV = {
 #
 
 # %%
-USE_PHASE2_GUARD5 = True
-
 if USE_PHASE2_GUARD5:
     command = [
         PYTHON,
