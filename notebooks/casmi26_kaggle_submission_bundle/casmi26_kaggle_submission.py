@@ -3,14 +3,14 @@
 #
 # This is the offline Kaggle entry point for the CASMI26 inference project.
 #
-# By default it runs the Phase 2 production pipeline:
-# 1. frozen production + MSBuddy formula fusion;
-# 2. formula-specific candidate retrieval augmented with the PubChem mass-tier asset;
-# 3. Morgan-4096 structural-neighbor and spectrum-fingerprint scoring;
-# 4. the frozen learned ranker and negative-mode retrieval fallback;
+# By default it runs Phase 2 on the original 0.403 workflow:
+# 1. frozen production formula hypotheses + MSBuddy formula fusion;
+# 2. candidate structures from training, approved COCONUT, and PubChem mass-tier;
+# 3. the original MIST contrastive retrieval using Morgan-4096 fingerprints;
+# 4. the unchanged positive ranking and same-polarity retrieval fallback;
 # 5. submission assembly and Kaggle-format validation.
 #
-# The original notebook workflow that produced the 0.403 baseline remains available as a fallback. Set `USE_PHASE2_GUARD5 = False` to run that original sequence instead.
+# The original notebook workflow that produced the 0.403 baseline remains available as a fallback. Set `USE_PHASE2 = False` to run that original sequence instead.
 #
 # The competition reruns this notebook against a hidden replacement for `test.parquet`, so predictions must be recomputed from the attached inference assets.
 #
@@ -18,47 +18,45 @@
 # %% [markdown]
 # ## Required Kaggle inputs
 #
-# Attach the competition data plus one dataset containing the frozen inference assets.
+# Attach these three Kaggle inputs:
+# - the Enveda CASMI26 competition dataset;
+# - `casmi26-inference-assets`, containing the project snapshot and MIST folder;
+# - `casmi26-pubchem-tier`, containing the three PubChem mass-tier arrays.
 #
-# The project snapshot must include the Phase 2 pipeline files and these assets:
+# The project snapshot must be refreshed from branch
+# `phase2-production-msbuddy-mass-tier` and contain:
 #
 # ```text
-# project/
-#   scripts/
-#     run_kaggle_guard5_inference.py
-#     build_test_multispectrum_formula_hypotheses.py
-#     build_test_msbuddy_fused_formula_hypotheses.py
-#     prepare_test_guard5_candidates.py
-#     score_test_guard5_spectrum_fingerprint.py
-#     build_test_learned_ranker_features.py
-#     rank_test_learned_ranker.py
-#     rank_test_negative_retrieval.py
-#     build_submission.py
-#   src/casmi26/
-#   data/processed/
-#     formula_index/
-#     structure_index/
-#     retrieval_index/
-#     pubchem_formula_index/
-#     spectrum_fingerprint/prototype/spectrum_to_morgan2048.pt
-#     diagnostics/large_validation_audit/true_formula_neighbor_benchmark/
-#       learned_ranker_top500/lgbm_ranker.txt
-#   data/external/
-#     coconut/
-#     casmi26-public-assets/
-#       pubchem_tier__pc_mass.npy
-#       pubchem_tier__pc_off.npy
-#       pubchem_tier__pc_smiles.npy
-#
-# MIST/
-#   src/mist/
-#   pretrained_models/mist_contrastive_canopus_pretrain.ckpt
-#   ../wheelhouse/
+# project/scripts/
+#   build_test_multispectrum_formula_hypotheses.py
+#   build_test_msbuddy_fused_formula_hypotheses.py
+#   export_test_mist_inputs.py
+#   filter_test_mist_supported.py
+#   build_test_contrastive_candidates.py
+#   rank_test_positive_contrastive.py
+#   rank_test_negative_retrieval.py
+#   build_submission.py
+#   run_kaggle_phase2_inference.py
+# project/src/casmi26/
+#   chemistry/inference.py
+#   pubchem/mass_tier.py
+#   pubchem/mass_tier_candidates.py
+# project/data/processed/
+#   formula_index/training_coconut_formulas.parquet
+#   structure_index/structures.parquet
+#   retrieval_index/metadata.parquet
+#   retrieval_index/vectors.npz
+# project/data/external/coconut/coconut_approved.parquet
+# MIST/src/mist/
+# MIST/pretrained_models/mist_contrastive_canopus_pretrain.ckpt
+# wheelhouse/rdkit-*.whl
+# wheelhouse/msbuddy-0.3.16-*.whl
 # ```
 #
-# The offline wheelhouse beside the MIST folder must contain `msbuddy==0.3.16` and the required runtime wheels (including RDKit if it is not already available).
-#
-# The notebook retains the original 0.403 workflow as a reproducible fallback. The Phase 2 path is selected by default below.
+# The PubChem mass-tier arrays stay in the separate `casmi26-pubchem-tier`
+# dataset; the notebook passes that mounted directory to the runner directly.
+# The runner checks for the exact MSBuddy version and fails before inference if
+# its wheel is missing. The original 0.403 workflow remains available below.
 #
 
 # %%
@@ -73,7 +71,7 @@ import pandas as pd
 KAGGLE_INPUT = Path("/kaggle/input")
 WORKING = Path("/kaggle/working")
 WORK_ROOT = WORKING / "casmi26"
-USE_PHASE2_GUARD5 = True
+USE_PHASE2 = True
 
 print("Python:", sys.version)
 print("Executable:", sys.executable)
@@ -98,17 +96,56 @@ TEST_SOURCE = find_file("test.parquet", "enveda")
 SAMPLE_SOURCE = find_file("sample_submission.csv", "enveda")
 TRAIN_SOURCE = find_file("train.parquet", "enveda")
 
-PROJECT_SCRIPT = find_file("build_test_multispectrum_formula_hypotheses.py")
+PROJECT_SCRIPT = find_file(
+    "build_test_multispectrum_formula_hypotheses.py",
+    "casmi26-inference-assets",
+)
 PROJECT_SOURCE = PROJECT_SCRIPT.parent.parent
 
-MIST_ENTRY = find_file("retrieval_contrast.py")
-MIST_SOURCE = MIST_ENTRY.parents[2]
+MIST_SOURCE = PROJECT_SOURCE.parent / "MIST"
+if not MIST_SOURCE.is_dir():
+    raise FileNotFoundError(f"Expected MIST beside project snapshot: {MIST_SOURCE}")
+
+MASS_TIER_ENTRY = find_file("pubchem_tier__pc_mass.npy")
+PUBCHEM_MASS_TIER_ROOT = MASS_TIER_ENTRY.parent
+for asset_name in ("pubchem_tier__pc_off.npy", "pubchem_tier__pc_smiles.npy"):
+    if not (PUBCHEM_MASS_TIER_ROOT / asset_name).is_file():
+        raise FileNotFoundError(PUBCHEM_MASS_TIER_ROOT / asset_name)
+
+PHASE2_REQUIRED_PROJECT_FILES = [
+    "scripts/run_kaggle_phase2_inference.py",
+    "scripts/build_test_msbuddy_fused_formula_hypotheses.py",
+    "scripts/filter_test_mist_supported.py",
+    "scripts/build_test_contrastive_candidates.py",
+    "scripts/export_test_mist_inputs.py",
+    "scripts/rank_test_positive_contrastive.py",
+    "src/casmi26/chemistry/inference.py",
+    "src/casmi26/pubchem/mass_tier.py",
+    "src/casmi26/pubchem/mass_tier_candidates.py",
+]
+missing_phase2_code = [
+    PROJECT_SOURCE / relative
+    for relative in PHASE2_REQUIRED_PROJECT_FILES
+    if not (PROJECT_SOURCE / relative).is_file()
+]
+if missing_phase2_code:
+    raise RuntimeError(
+        "The attached casmi26-inference-assets project snapshot is older "
+        "than Phase 2. Publish a new version with project/scripts and "
+        "project/src from branch phase2-production-msbuddy-mass-tier. "
+        "Missing files:\\n"
+        + "\\n".join(str(path) for path in missing_phase2_code)
+    )
+
+MSBUDDY_WHEELS = sorted(KAGGLE_INPUT.rglob("msbuddy-0.3.16*.whl"))
 
 print("Competition test:", TEST_SOURCE)
 print("Competition sample:", SAMPLE_SOURCE)
 print("Competition train:", TRAIN_SOURCE)
 print("Project source:", PROJECT_SOURCE)
 print("MIST source:", MIST_SOURCE)
+print("PubChem mass-tier root:", PUBCHEM_MASS_TIER_ROOT)
+print("MSBuddy wheels found:", len(MSBUDDY_WHEELS))
 
 # %%
 if WORK_ROOT.exists():
@@ -144,7 +181,7 @@ if WHEELHOUSE.is_dir():
     print("Offline wheelhouse:", WHEELHOUSE)
     wheels = sorted(WHEELHOUSE.glob("*.whl"))
     print("Wheel count:", len(wheels))
-    if USE_PHASE2_GUARD5:
+    if USE_PHASE2:
         print("The Phase 2 runner installs this wheelhouse immediately before inference.")
     elif wheels:
         subprocess.run(
@@ -200,22 +237,28 @@ PIPELINE_ENV = {
 # %% [markdown]
 # ## Phase 2: production formula fusion and expanded candidates
 #
-# This runs the repository's production inference runner. It applies the frozen MSBuddy formula fusion settings and PubChem mass-tier candidate source, then uses the existing Morgan-4096/MIST/COCONUT ranking pipeline. It does not tune on the Kaggle test set.
+# This runs the original MIST/Morgan-4096 pipeline with only two additions:
+# frozen MSBuddy formula fusion and PubChem mass-tier structures in the
+# existing formula-specific candidate universe. The MIST checkpoint,
+# Morgan-4096 retrieval, ranking weights, and negative fallback are unchanged.
 #
-# Set `USE_PHASE2_GUARD5 = False` to reproduce the original notebook workflow that produced the 0.403 baseline.
+# Set `USE_PHASE2 = False` to reproduce the original 0.403 workflow.
 #
 
 # %%
-if USE_PHASE2_GUARD5:
+if USE_PHASE2:
     command = [
         PYTHON,
-        "scripts/run_kaggle_guard5_inference.py",
+        "scripts/run_kaggle_phase2_inference.py",
         "--project-root", str(WORK_ROOT),
         "--mist-root", str(MIST_SOURCE),
         "--test-path", str(TEST_SOURCE),
         "--sample-submission-path", str(SAMPLE_SOURCE),
-        "--phase2",
+        "--pubchem-mass-tier-root", str(PUBCHEM_MASS_TIER_ROOT),
+        "--wheelhouse", str(WHEELHOUSE),
     ]
+    if MSBUDDY_WHEELS:
+        command.extend(["--msbuddy-wheel", str(MSBUDDY_WHEELS[0])])
     run(command, env=PIPELINE_ENV)
 
     project_submission = WORK_ROOT / "submission.csv"
@@ -228,11 +271,11 @@ if USE_PHASE2_GUARD5:
 # %% [markdown]
 # ## Legacy baseline pipeline: original 0.403 workflow
 #
-# These cells are retained unchanged in behavior for reproduction. They run only when `USE_PHASE2_GUARD5 = False`.
+# These cells retain the original 0.403 workflow. They run only when `USE_PHASE2 = False`.
 #
 
 # %%
-if not USE_PHASE2_GUARD5:
+if not USE_PHASE2:
     run(
         [PYTHON, "scripts/build_test_multispectrum_formula_hypotheses.py"],
         env=PIPELINE_ENV,
@@ -242,7 +285,7 @@ if not USE_PHASE2_GUARD5:
 # ## Legacy baseline — 2. Export MIST test inputs
 
 # %%
-if not USE_PHASE2_GUARD5:
+if not USE_PHASE2:
     run(
         [PYTHON, "scripts/export_test_mist_inputs.py"],
         env=PIPELINE_ENV,
@@ -255,7 +298,7 @@ if not USE_PHASE2_GUARD5:
 #
 
 # %%
-if not USE_PHASE2_GUARD5:
+if not USE_PHASE2:
     root = WORK_ROOT / "data/processed/test"
     
     hyp = pd.read_parquet(root / "multispectrum_formula_hypotheses.parquet")
@@ -300,7 +343,7 @@ if not USE_PHASE2_GUARD5:
 # ## Legacy baseline — 4. Generate positive-ion subformula assignments
 
 # %%
-if not USE_PHASE2_GUARD5:
+if not USE_PHASE2:
     subforms_positive = root / "mist/subforms_positive"
     if subforms_positive.exists():
         shutil.rmtree(subforms_positive)
@@ -326,7 +369,7 @@ if not USE_PHASE2_GUARD5:
 # ## Legacy baseline — 5. Build the full test-time structure candidate universe
 
 # %%
-if not USE_PHASE2_GUARD5:
+if not USE_PHASE2:
     run(
         [PYTHON, "scripts/build_test_contrastive_candidates.py"],
         env=PIPELINE_ENV,
@@ -347,7 +390,7 @@ if not USE_PHASE2_GUARD5:
 # ## Legacy baseline — 6. Positive-ion contrastive MIST retrieval
 
 # %%
-if not USE_PHASE2_GUARD5:
+if not USE_PHASE2:
     positive_predictions = root / "contrastive_predictions_positive"
     if positive_predictions.exists():
         shutil.rmtree(positive_predictions)
@@ -377,7 +420,7 @@ if not USE_PHASE2_GUARD5:
 # ## Legacy baseline — 7. Rank positive-ion candidates
 
 # %%
-if not USE_PHASE2_GUARD5:
+if not USE_PHASE2:
     run(
         [PYTHON, "scripts/rank_test_positive_contrastive.py"],
         env=PIPELINE_ENV,
@@ -390,7 +433,7 @@ if not USE_PHASE2_GUARD5:
 #
 
 # %%
-if not USE_PHASE2_GUARD5:
+if not USE_PHASE2:
     run(
         [PYTHON, "scripts/rank_test_negative_retrieval.py"],
         env=PIPELINE_ENV,
@@ -400,7 +443,7 @@ if not USE_PHASE2_GUARD5:
 # ## Legacy baseline — 9. Assemble `submission.csv`
 
 # %%
-if not USE_PHASE2_GUARD5:
+if not USE_PHASE2:
     run(
         [PYTHON, "scripts/build_submission.py"],
         env=PIPELINE_ENV,
@@ -445,7 +488,7 @@ print("submission.csv is ready at /kaggle/working/submission.csv")
 # - Competition dataset attached
 # - Updated inference-assets dataset attached (including the three PubChem mass-tier arrays and the learned-ranker/model assets listed above)
 # - Offline wheelhouse beside MIST includes **msbuddy==0.3.16**
-# - `USE_PHASE2_GUARD5 = True` for the Phase 2 pipeline; set it to `False` only to reproduce the original 0.403 notebook workflow
+# - `USE_PHASE2 = True` for the Phase 2 pipeline; set it to `False` only to reproduce the original 0.403 notebook workflow
 # - `/kaggle/working/submission.csv` produced and validated successfully
 # - Do not use a precomputed visible-test submission: Kaggle replaces `test.parquet` during the hidden rerun
 #
