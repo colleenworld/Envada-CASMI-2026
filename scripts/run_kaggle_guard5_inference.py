@@ -46,6 +46,14 @@ def parse_args():
         type=int,
         default=2,
     )
+    parser.add_argument(
+        "--phase2",
+        action="store_true",
+        help=(
+            "Enable frozen MSBuddy formula fusion and PubChem "
+            "mass-tier candidate augmentation."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -123,6 +131,20 @@ def main() -> None:
         sample_path,
     ]
 
+    mass_tier_root = (
+        project_root
+        / "data/external/casmi26-public-assets"
+    )
+
+    if args.phase2:
+        required.extend(
+            [
+                mass_tier_root / "pubchem_tier__pc_mass.npy",
+                mass_tier_root / "pubchem_tier__pc_off.npy",
+                mass_tier_root / "pubchem_tier__pc_smiles.npy",
+            ]
+        )
+
     missing = [
         path
         for path in required
@@ -191,6 +213,28 @@ def main() -> None:
     ] = str(
         mist_root
     )
+
+    if args.phase2:
+        env[
+            "CASMI26_FORMULA_HYPOTHESES_PATH"
+        ] = str(
+            project_root
+            / "data/processed/test/"
+              "multispectrum_formula_hypotheses_fused.parquet"
+        )
+        env[
+            "CASMI26_USE_PUBCHEM_MASS_TIER"
+        ] = "1"
+        env[
+            "CASMI26_PUBCHEM_MASS_TIER_ROOT"
+        ] = str(
+            mass_tier_root
+        )
+        # MSBuddy-only formulas may not exist in the formula-specific
+        # PubChem buckets; mass-tier candidates provide their fallback.
+        env[
+            "CASMI26_ALLOW_PARTIAL_PUBCHEM"
+        ] = "1"
 
     # Preserve the virtual-environment interpreter path.
     # Resolving a venv symlink can fall back to the system interpreter.
@@ -276,15 +320,46 @@ def main() -> None:
             "available after offline wheelhouse setup."
         ) from exc
 
+    if args.phase2:
+        try:
+            subprocess.run(
+                [
+                    python,
+                    "-c",
+                    "import msbuddy; print('MSBuddy:', getattr(msbuddy, '__version__', 'installed'))",
+                ],
+                cwd=project_root,
+                env=env,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                "Phase 2 requires msbuddy==0.3.16. Include its wheel and "
+                "dependencies in the offline wheelhouse, or install it "
+                "in the Kaggle environment before running this pipeline."
+            ) from exc
+
     stages = [
         [
             python,
             "scripts/build_test_multispectrum_formula_hypotheses.py",
         ],
+    ]
+
+    if args.phase2:
+        stages.append(
+            [
+                python,
+                "scripts/build_test_msbuddy_fused_formula_hypotheses.py",
+            ]
+        )
+
+    stages.extend(
         [
-            python,
-            "scripts/prepare_test_guard5_candidates.py",
-        ],
+            [
+                python,
+                "scripts/prepare_test_guard5_candidates.py",
+            ],
         [
             python,
             "scripts/score_test_guard5_spectrum_fingerprint.py",
@@ -301,11 +376,12 @@ def main() -> None:
             python,
             "scripts/rank_test_negative_retrieval.py",
         ],
-        [
-            python,
-            "scripts/build_submission.py",
-        ],
-    ]
+            [
+                python,
+                "scripts/build_submission.py",
+            ],
+        ]
+    )
 
     print(
         "Guard-5 Kaggle inference"
@@ -324,6 +400,10 @@ def main() -> None:
     print(
         "Python:",
         python,
+    )
+    print(
+        "Phase 2:",
+        "enabled" if args.phase2 else "disabled (baseline)",
     )
 
     for command in stages:
