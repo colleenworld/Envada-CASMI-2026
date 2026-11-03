@@ -374,22 +374,22 @@ def main() -> None:
                 python,
                 "scripts/prepare_test_guard5_candidates.py",
             ],
-        [
-            python,
-            "scripts/score_test_guard5_spectrum_fingerprint.py",
-        ],
-        [
-            python,
-            "scripts/build_test_learned_ranker_features.py",
-        ],
-        [
-            python,
-            "scripts/rank_test_learned_ranker.py",
-        ],
-        [
-            python,
-            "scripts/rank_test_negative_retrieval.py",
-        ],
+            [
+                python,
+                "scripts/score_test_guard5_spectrum_fingerprint.py",
+            ],
+            [
+                python,
+                "scripts/build_test_learned_ranker_features.py",
+            ],
+            [
+                python,
+                "scripts/rank_test_learned_ranker.py",
+            ],
+            [
+                python,
+                "scripts/rank_test_negative_retrieval.py",
+            ],
             [
                 python,
                 "scripts/build_submission.py",
