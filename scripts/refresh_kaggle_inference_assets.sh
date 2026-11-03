@@ -206,6 +206,22 @@ BRAIN_WHEEL="$(find "$WHEELHOUSE" -maxdepth 1 -type f \
 MSBUDDY_WHEEL="$(find "$WHEELHOUSE" -maxdepth 1 -type f -name 'msbuddy-0.3.16-*.whl' -print -quit)"
 [[ -n "$MSBUDDY_WHEEL" ]] || fail "MSBuddy 0.3.16 wheel was not downloaded"
 
+# MSBuddy's package page lists Python <3.13 as its supported range. Kaggle's
+# current image is Python 3.13, so verify the exact imports used by the runner
+# in the matching target interpreter before allowing publication.
+echo "Checking MSBuddy 0.3.16 imports under ${KAGGLE_PYTHON_ABI}..."
+docker run --rm --platform linux/amd64 \
+  -v "$WHEELHOUSE:/wheelhouse" \
+  "$WHEEL_BUILD_IMAGE" \
+  bash -lc "
+    set -euo pipefail
+    TARGET_PYTHON='/opt/python/${KAGGLE_PYTHON_ABI}-${KAGGLE_PYTHON_ABI}/bin/python'
+    [[ -x \"\$TARGET_PYTHON\" ]] || { echo \"Missing target interpreter: \$TARGET_PYTHON\" >&2; exit 1; }
+    \"\$TARGET_PYTHON\" -m pip install --no-index --find-links /wheelhouse 'msbuddy==0.3.16' lightgbm
+    \"\$TARGET_PYTHON\" -c 'from msbuddy import Msbuddy, MsbuddyConfig; from msbuddy.base import MetaFeature, Spectrum; assert all((Msbuddy, MsbuddyConfig, MetaFeature, Spectrum))'
+  "
+echo "MSBuddy 0.3.16 imports verified under ${KAGGLE_PYTHON_ABI}."
+
 echo
 echo "MSBuddy wheel: $MSBUDDY_WHEEL"
 echo "Wheelhouse now contains $(find "$WHEELHOUSE" -maxdepth 1 -type f -name '*.whl' | wc -l) wheels."
