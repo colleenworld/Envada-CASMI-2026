@@ -231,6 +231,9 @@ MIST_PYTHON = sys.executable
 
 PIPELINE_ENV = {
     "CASMI26_PROJECT_ROOT": str(WORK_ROOT),
+    "MIST_ROOT": str(MIST_SOURCE),
+    "MIST_PYTHON": sys.executable,
+    "CASMI26_USE_PUBCHEM_MASS_TIER": "0",
 }
 
 # %% [markdown]
