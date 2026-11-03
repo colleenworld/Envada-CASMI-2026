@@ -61,6 +61,7 @@ PYTHON="${PYTHON:-python3}"
 KAGGLE_PYTHON_VERSION="${KAGGLE_PYTHON_VERSION:-3.13}"
 KAGGLE_PYTHON_ABI="${KAGGLE_PYTHON_ABI:-cp313}"
 KAGGLE_MANYLINUX_PLATFORM="${KAGGLE_MANYLINUX_PLATFORM:-manylinux_2_28_x86_64}"
+WHEEL_BUILD_IMAGE="${WHEEL_BUILD_IMAGE:-quay.io/pypa/manylinux_2_28_x86_64}"
 MESSAGE="Refresh CASMI26 Phase 2 inference assets (MSBuddy 0.3.16)"
 
 fail() {
@@ -145,11 +146,52 @@ done
 echo
 echo "Phase 2 project code copied and verified."
 
-# Download the MSBuddy wheel and its dependencies for the Kaggle Python ABI.
+# brain-isotopic-distribution has no CPython 3.13 Linux x86_64 wheel.
+# Build a wheel for the Kaggle ABI in the official manylinux image, then let
+# pip resolve MSBuddy and its remaining dependencies using the completed wheelhouse.
+BRAIN_WHEEL="$(find "$WHEELHOUSE" -maxdepth 1 -type f \
+  -name "brain_isotopic_distribution-*-${KAGGLE_PYTHON_ABI}-${KAGGLE_PYTHON_ABI}-${KAGGLE_MANYLINUX_PLATFORM}.whl" \
+  -print -quit)"
+if [[ -z "$BRAIN_WHEEL" ]]; then
+  command -v docker >/dev/null 2>&1 || fail "Docker is required to build the CPython ${KAGGLE_PYTHON_ABI} brain-isotopic-distribution wheel"
+  echo "Downloading brain-isotopic-distribution source distribution..."
+  "$PYTHON" -m pip download \
+    --dest "$WHEELHOUSE" \
+    --no-deps \
+    --no-binary=:all: \
+    brain-isotopic-distribution
+
+  BRAIN_SDIST="$(find "$WHEELHOUSE" -maxdepth 1 -type f -name 'brain_isotopic_distribution-*.tar.gz' -print -quit)"
+  [[ -n "$BRAIN_SDIST" ]] || fail "brain-isotopic-distribution source archive was not downloaded"
+
+  echo "Building brain-isotopic-distribution for ${KAGGLE_PYTHON_ABI} in $WHEEL_BUILD_IMAGE..."
+  docker run --rm --platform linux/amd64 \
+    -v "$WHEELHOUSE:/wheelhouse" \
+    "$WHEEL_BUILD_IMAGE" \
+    bash -lc "
+      set -euo pipefail
+      TARGET_PYTHON='/opt/python/${KAGGLE_PYTHON_ABI}-${KAGGLE_PYTHON_ABI}/bin/python'
+      [[ -x \"\$TARGET_PYTHON\" ]] || { echo \"Missing target interpreter: \$TARGET_PYTHON\" >&2; exit 1; }
+      mkdir -p /tmp/brain-wheel
+      \"\$TARGET_PYTHON\" -m pip wheel --no-deps --wheel-dir /tmp/brain-wheel /wheelhouse/$(basename "$BRAIN_SDIST")
+      auditwheel repair --plat '${KAGGLE_MANYLINUX_PLATFORM}' --wheel-dir /wheelhouse /tmp/brain-wheel/brain_isotopic_distribution-*.whl
+      \"\$TARGET_PYTHON\" -m pip install --no-deps --no-index --find-links /wheelhouse brain-isotopic-distribution
+      \"\$TARGET_PYTHON\" -c 'from brainpy import isotopic_variants; peaks = isotopic_variants({"C": 6, "H": 12, "O": 6}, npeaks=3); assert len(peaks) == 3; print("brainpy smoke test passed")'
+    "
+  rm -f "$BRAIN_SDIST"
+fi
+
+BRAIN_WHEEL="$(find "$WHEELHOUSE" -maxdepth 1 -type f \
+  -name "brain_isotopic_distribution-*-${KAGGLE_PYTHON_ABI}-${KAGGLE_PYTHON_ABI}-${KAGGLE_MANYLINUX_PLATFORM}.whl" \
+  -print -quit)"
+[[ -n "$BRAIN_WHEEL" ]] || fail "No brain-isotopic-distribution wheel was built for ${KAGGLE_PYTHON_ABI} / ${KAGGLE_MANYLINUX_PLATFORM}"
+
 # pip download appends wheels; it does not remove or replace the existing
-# RDKit/MIST wheelhouse contents.
+# RDKit/MIST wheelhouse contents. The local brainpy wheel satisfies MSBuddy's
+# dependency while the remaining packages are resolved from binary wheels.
 "$PYTHON" -m pip download \
   --dest "$WHEELHOUSE" \
+  --find-links "$WHEELHOUSE" \
   --only-binary=:all: \
   --python-version "$KAGGLE_PYTHON_VERSION" \
   --implementation cp \
@@ -161,7 +203,6 @@ echo "Phase 2 project code copied and verified."
   "msbuddy==0.3.16" \
   lightgbm
 
-MSBUDDY_WHEEL="$(find "$WHEELHOUSE" -maxdepth 1 -type f -name 'msbuddy-0.3.16-*.whl' -print -quit)"
 [[ -n "$MSBUDDY_WHEEL" ]] || fail "MSBuddy 0.3.16 wheel was not downloaded"
 
 echo
