@@ -79,6 +79,27 @@ def ensure_rdkit(python: str, wheelhouse: Path | None, cwd: Path) -> None:
     )
 
 
+def ensure_msbuddy_import(python: str, cwd: Path) -> None:
+    import_check = subprocess.run(
+        [
+            python,
+            "-c",
+            "from msbuddy import Msbuddy, MsbuddyConfig; "
+            "from msbuddy.base import MetaFeature, Spectrum",
+        ],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+    )
+    if import_check.returncode != 0:
+        raise RuntimeError(
+            "MSBuddy 0.3.16 is installed but its runtime imports failed. "
+            "Check that all MSBuddy dependencies are available in the offline "
+            "wheelhouse.\n"
+            + import_check.stderr
+        )
+
+
 def ensure_msbuddy(
     python: str,
     wheelhouse: Path | None,
@@ -92,6 +113,7 @@ def ensure_msbuddy(
                 f"Phase 2 requires msbuddy==0.3.16; found {actual}."
             )
         print("MSBuddy:", actual)
+        ensure_msbuddy_import(python, cwd)
         return
 
     wheel = explicit_wheel
@@ -128,25 +150,7 @@ def ensure_msbuddy(
             f"MSBuddy wheel install did not produce version 0.3.16; found {actual!r}."
         )
     print("MSBuddy:", actual)
-
-    import_check = subprocess.run(
-        [
-            python,
-            "-c",
-            "from msbuddy import Msbuddy, MsbuddyConfig; "
-            "from msbuddy.base import MetaFeature, Spectrum",
-        ],
-        cwd=cwd,
-        text=True,
-        capture_output=True,
-    )
-    if import_check.returncode != 0:
-        raise RuntimeError(
-            "MSBuddy 0.3.16 is installed but its runtime imports failed. "
-            "Check that all MSBuddy dependencies are available in the offline "
-            "wheelhouse.\\n"
-            + import_check.stderr
-        )
+    ensure_msbuddy_import(python, cwd)
 
 
 def main() -> None:
@@ -173,7 +177,6 @@ def main() -> None:
     fused_hypotheses = (
         test_root / "multispectrum_formula_hypotheses_fused.parquet"
     )
-    labels_path = test_root / "mist/test_multiformula_labels.tsv"
     positive_labels_path = (
         test_root / "mist/test_multiformula_labels_mist_supported.tsv"
     )
