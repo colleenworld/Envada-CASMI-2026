@@ -4,27 +4,27 @@
 # This is the offline Kaggle entry point for the CASMI26 inference project.
 #
 # By default it runs Phase 2 on the original 0.403 workflow:
-# 1. frozen production formula hypotheses + MSBuddy formula fusion;
-# 2. candidate structures from training, approved COCONUT, and PubChem mass-tier;
-# 3. the original MIST contrastive retrieval using Morgan-4096 fingerprints;
-# 4. the unchanged positive ranking and same-polarity retrieval fallback;
-# 5. submission assembly and Kaggle-format validation.
 #
-# The original notebook workflow that produced the 0.403 baseline remains available as a fallback. Set `USE_PHASE2 = False` to run that original sequence instead.
+# 1. Frozen production formula hypotheses plus MSBuddy formula fusion.
+# 2. Candidate structures from training, approved COCONUT, and PubChem mass-tier.
+# 3. The original MIST contrastive retrieval using Morgan-4096 fingerprints.
+# 4. The unchanged positive ranking and same-polarity retrieval fallback.
+# 5. Submission assembly and Kaggle-format validation.
 #
-# The competition reruns this notebook against a hidden replacement for `test.parquet`, so predictions must be recomputed from the attached inference assets.
+# The original notebook workflow that produced 0.403 remains available as a fallback. Set `USE_PHASE2 = False` to reproduce it.
 #
+# The competition reruns this notebook against a hidden replacement for `test.parquet`, so predictions are recomputed from the attached inference assets.
 
 # %% [markdown]
 # ## Required Kaggle inputs
 #
 # Attach these three Kaggle inputs:
-# - the Enveda CASMI26 competition dataset;
-# - `casmi26-inference-assets`, containing the project snapshot and MIST folder;
+#
+# - The Enveda CASMI26 competition dataset.
+# - `casmi26-inference-assets`, containing the project snapshot and MIST folder.
 # - `casmi26-pubchem-tier`, containing the three PubChem mass-tier arrays.
 #
-# The project snapshot must be refreshed from branch
-# `phase2-production-msbuddy-mass-tier` and contain:
+# The project snapshot must be refreshed from branch `phase2-production-msbuddy-mass-tier` and contain:
 #
 # ```text
 # project/scripts/
@@ -53,11 +53,9 @@
 # wheelhouse/msbuddy-0.3.16-*.whl
 # ```
 #
-# The PubChem mass-tier arrays stay in the separate `casmi26-pubchem-tier`
-# dataset; the notebook passes that mounted directory to the runner directly.
-# The runner checks for the exact MSBuddy version and fails before inference if
-# its wheel is missing. The original 0.403 workflow remains available below.
+# The PubChem mass-tier arrays remain in the separate `casmi26-pubchem-tier` dataset; the notebook passes that mounted directory directly to the runner.
 #
+# The runner requires exactly `msbuddy==0.3.16`. If it is not already installed, its wheel must be present in the offline wheelhouse. No internet access is required.
 
 # %%
 from pathlib import Path
@@ -133,8 +131,8 @@ if missing_phase2_code:
         "The attached casmi26-inference-assets project snapshot is older "
         "than Phase 2. Publish a new version with project/scripts and "
         "project/src from branch phase2-production-msbuddy-mass-tier. "
-        "Missing files:\\n"
-        + "\\n".join(str(path) for path in missing_phase2_code)
+        "Missing files:\n"
+        + "\n".join(str(path) for path in missing_phase2_code)
     )
 
 MSBUDDY_WHEELS = sorted(KAGGLE_INPUT.rglob("msbuddy-0.3.16*.whl"))
@@ -167,12 +165,12 @@ train_target.symlink_to(TRAIN_SOURCE)
 print("Writable project:", WORK_ROOT)
 print("Hidden test rows:", len(pd.read_parquet(raw_dir / "test.parquet")))
 print("Sample rows:", len(pd.read_csv(raw_dir / "sample_submission.csv")))
+print("PubChem mass-tier assets will be read from:", PUBCHEM_MASS_TIER_ROOT)
 
 # %% [markdown]
 # ## Offline dependency install
 #
-# Keep internet disabled. The Phase 2 runner uses the wheelhouse beside the discovered MIST folder and requires **msbuddy==0.3.16**. This cell installs the local wheelhouse for the legacy baseline path as well; the Phase 2 runner also performs its own offline dependency setup and version check.
-#
+# Keep internet disabled. The Phase 2 runner installs only the required offline wheels immediately before inference. The wheelhouse beside MIST must include `msbuddy==0.3.16`; RDKit is also required. The legacy fallback retains its original wheelhouse setup.
 
 # %%
 WHEELHOUSE = MIST_SOURCE.parent / "wheelhouse"
@@ -182,7 +180,8 @@ if WHEELHOUSE.is_dir():
     wheels = sorted(WHEELHOUSE.glob("*.whl"))
     print("Wheel count:", len(wheels))
     if USE_PHASE2:
-        print("The Phase 2 runner installs this wheelhouse immediately before inference.")
+        print("The Phase 2 runner installs/checks the required offline dependencies before inference.")
+        print("MSBuddy wheel found:", bool(MSBUDDY_WHEELS))
     elif wheels:
         subprocess.run(
             [
@@ -235,15 +234,13 @@ PIPELINE_ENV = {
 }
 
 # %% [markdown]
-# ## Phase 2: production formula fusion and expanded candidates
+# ## Phase 2: frozen formula fusion + original MIST/Morgan-4096 retrieval
 #
-# This runs the original MIST/Morgan-4096 pipeline with only two additions:
-# frozen MSBuddy formula fusion and PubChem mass-tier structures in the
-# existing formula-specific candidate universe. The MIST checkpoint,
-# Morgan-4096 retrieval, ranking weights, and negative fallback are unchanged.
+# This runs the original 0.403 pipeline with two additions: frozen MSBuddy formula fusion and PubChem mass-tier structures in the existing formula-specific candidate universe.
+#
+# The MIST checkpoint, Morgan-4096 retrieval, ranking weights, and negative-mode fallback are unchanged.
 #
 # Set `USE_PHASE2 = False` to reproduce the original 0.403 workflow.
-#
 
 # %%
 if USE_PHASE2:
@@ -272,7 +269,6 @@ if USE_PHASE2:
 # ## Legacy baseline pipeline: original 0.403 workflow
 #
 # These cells retain the original 0.403 workflow. They run only when `USE_PHASE2 = False`.
-#
 
 # %%
 if not USE_PHASE2:
@@ -295,7 +291,6 @@ if not USE_PHASE2:
 # ## Legacy baseline — 3. Keep only MIST-supported positive-ion hypotheses
 #
 # The pretrained checkpoint is positive-ion only. `[M+NH4]+` is remapped to MIST's internal `[M+H3N+H]+`. Negative-only molecules are handled later by the frozen spectral-retrieval fallback.
-#
 
 # %%
 if not USE_PHASE2:
@@ -430,7 +425,6 @@ if not USE_PHASE2:
 # ## Legacy baseline — 8. Rank negative-only molecules with frozen spectral retrieval
 #
 # This branch uses same-polarity retrieval with neutral-mass filtering at ±0.01 Da, falling back to unrestricted same-negative-mode cosine only if no mass-filtered candidates exist.
-#
 
 # %%
 if not USE_PHASE2:
@@ -481,7 +475,7 @@ print("submission.csv is ready at /kaggle/working/submission.csv")
 # %% [markdown]
 # ## Commit / submit checklist
 #
-# Before the final Kaggle commit:
+# Before the final Kaggle commit, confirm the refreshed inference-assets dataset includes the Phase 2 source files and the offline MSBuddy 0.3.16 wheel, and that the separate PubChem mass-tier dataset is attached:
 #
 # - Internet: **Off**
 # - Runtime: **under 9 hours**
@@ -491,4 +485,4 @@ print("submission.csv is ready at /kaggle/working/submission.csv")
 # - `USE_PHASE2 = True` for the Phase 2 pipeline; set it to `False` only to reproduce the original 0.403 notebook workflow
 # - `/kaggle/working/submission.csv` produced and validated successfully
 # - Do not use a precomputed visible-test submission: Kaggle replaces `test.parquet` during the hidden rerun
-#
+
