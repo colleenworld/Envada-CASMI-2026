@@ -208,6 +208,20 @@ def main() -> None:
         # MSBuddy-only formulas may not exist in the formula-specific
         # PubChem buckets; mass-tier candidates provide their fallback.
         env["CASMI26_ALLOW_PARTIAL_PUBCHEM"] = "1"
+    else:
+        # Do not let inherited Phase 2 settings alter the baseline run.
+        env.pop(
+            "CASMI26_FORMULA_HYPOTHESES_PATH",
+            None,
+        )
+        env.pop(
+            "CASMI26_USE_PUBCHEM_MASS_TIER",
+            None,
+        )
+        env.pop(
+            "CASMI26_PUBCHEM_MASS_TIER_ROOT",
+            None,
+        )
 
     # Preserve the virtual-environment interpreter path.
     # Resolving a venv symlink can fall back to the system interpreter.
