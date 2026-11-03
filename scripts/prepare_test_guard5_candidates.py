@@ -14,6 +14,10 @@ from casmi26.pubchem.inference_asset import (
     load_pubchem_candidates_for_formulas,
     load_pubchem_candidates_from_assets,
 )
+from casmi26.pubchem.mass_tier_candidates import (
+    CANDIDATE_COLUMNS,
+    load_mass_tier_candidates,
+)
 from casmi26.pubchem.neighbor_pruning import (
     score_candidates,
 )
@@ -42,9 +46,11 @@ TEST_ROOT = (
     / "data/processed/test"
 )
 
-HYPOTHESES_PATH = (
-    TEST_ROOT
-    / "multispectrum_formula_hypotheses.parquet"
+HYPOTHESES_PATH = Path(
+    os.environ.get(
+        "CASMI26_FORMULA_HYPOTHESES_PATH",
+        TEST_ROOT / "multispectrum_formula_hypotheses.parquet",
+    )
 )
 
 PUBCHEM_ASSET_ROOT = (
@@ -607,6 +613,55 @@ def main() -> None:
         "candidate_source"
     ] = "coconut"
 
+    use_mass_tier = (
+        os.environ.get(
+            "CASMI26_USE_PUBCHEM_MASS_TIER",
+            "",
+        )
+        .strip()
+        .lower()
+        in {
+            "1",
+            "true",
+            "yes",
+        }
+    )
+
+    mass_tier = pd.DataFrame(
+        columns=CANDIDATE_COLUMNS
+    )
+
+    if use_mass_tier:
+        mass_tier_root = Path(
+            os.environ.get(
+                "CASMI26_PUBCHEM_MASS_TIER_ROOT",
+                PROJECT_ROOT / "data/external/casmi26-public-assets",
+            )
+        )
+
+        print()
+        print(
+            "Loading PubChem mass-tier candidates..."
+        )
+        print(
+            "Mass-tier asset root:",
+            mass_tier_root,
+        )
+
+        mass_tier, mass_tier_stats = (
+            load_mass_tier_candidates(
+                formulas,
+                mass_tier_root,
+                ppm=10.0,
+                excluded_structure_keys=excluded_structure_keys,
+            )
+        )
+
+        print(
+            "Mass-tier candidate statistics:",
+            mass_tier_stats,
+        )
+
     catalog = pd.concat(
         [
             known_training,
@@ -619,6 +674,7 @@ def main() -> None:
                     "candidate_source",
                 ]
             ],
+            mass_tier,
         ],
         ignore_index=True,
     )
@@ -634,6 +690,7 @@ def main() -> None:
                 "training": 0,
                 "coconut": 1,
                 "pubchem": 2,
+                "pubchem_mass_tier": 3,
             }
         )
     )
