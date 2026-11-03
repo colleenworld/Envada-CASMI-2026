@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -123,50 +124,51 @@ class PubChemMassTier:
             right - left,
         )
 
-    def smiles_window(
+    def iter_smiles_window(
         self,
         neutral_mass: float,
         *,
         ppm: float = 10.0,
-    ) -> list[str]:
+    ) -> Iterator[str]:
         left, right = self.window_bounds(
             neutral_mass,
             ppm=ppm,
         )
 
         if right <= left:
-            return []
+            return
 
-        offsets = np.asarray(
-            self.offsets[
-                left:right + 1
-            ],
-            dtype=np.int64,
-        )
+        offsets = self.offsets[
+            left:right + 1
+        ]
 
-        start = int(
-            offsets[0]
-        )
-        end = int(
-            offsets[-1]
-        )
+        for index in range(
+            right - left
+        ):
+            start = int(
+                offsets[index]
+            )
+            end = int(
+                offsets[index + 1]
+            )
 
-        raw = bytes(
-            self.smiles_buffer[
-                start:end
-            ]
-        )
-
-        base = start
-
-        return [
-            raw[
-                int(offsets[i]) - base:
-                int(offsets[i + 1]) - base
-            ].decode(
+            yield bytes(
+                self.smiles_buffer[
+                    start:end
+                ]
+            ).decode(
                 "ascii"
             )
-            for i in range(
-                right - left
+
+    def smiles_window(
+        self,
+        neutral_mass: float,
+        *,
+        ppm: float = 10.0,
+    ) -> list[str]:
+        return list(
+            self.iter_smiles_window(
+                neutral_mass,
+                ppm=ppm,
             )
-        ]
+        )
