@@ -166,11 +166,16 @@ def load_mass_tier_candidates(
                 }
             )
 
-        print(
-            f"  mass-tier formula {number:,}/{len(requested):,}: "
-            f"{formula} | window={window_size:,} "
-            f"| formula matches={formula_matches:,}"
-        )
+        if (
+            number % 50 == 0
+            or number == len(requested)
+        ):
+            print(
+                f"  mass-tier formulas {number:,}/{len(requested):,} "
+                f"| cumulative window candidates="
+                f"{stats['window_candidates']:,} "
+                f"| unique structures={len(rows):,}"
+            )
 
     stats["unique_candidates"] = len(rows)
 
