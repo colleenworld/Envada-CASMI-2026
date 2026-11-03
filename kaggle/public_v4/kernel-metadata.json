@@ -1,5 +1,5 @@
 {
-  "id": "YOUR_KAGGLE_USERNAME/casmi26-public-v4-test",
+  "id": "colleendavis/casmi26-public-v4-test",
   "title": "CASMI26 Public V4 Test",
   "code_file": "sota_top1_submission.py",
   "language": "python",
@@ -9,7 +9,8 @@
   "enable_internet": "false",
   "dataset_sources": [
     "dmitriigluzdov/casmi26-attributed-v4g-reproduction-assets",
-    "ahmedberatozer/casmi26-pubchem-tier"
+    "ahmedberatozer/casmi26-pubchem-tier",
+    "dmitriigluzdov/casmi26-pubchem-popularity-prior"
   ],
   "competition_sources": [
     "enveda-casmi26-molecule-id-mass-spectra"

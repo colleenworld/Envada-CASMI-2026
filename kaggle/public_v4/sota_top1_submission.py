@@ -1661,6 +1661,7 @@ def probe_one(task):
         fz.append(float(fp[bits].astype(np.float32) @ z)); idx.append(int(i))
     diag['n_pass2'] = len(idx)
     order = np.argsort(-np.asarray(fz), kind='stable')
+
     out, out_fz, out_k, seen = [], [], [], set()
     for o in order:
         s = smis[idx[o]]
@@ -2357,6 +2358,91 @@ for gi, (mid, sub) in enumerate(mols):
             if C is not None and len(C.pid):
                 score = rank_score(np.concatenate([X, F], 1), list(FEATURES) + list(names))
                 order = np.argsort(-score, kind='stable')
+                _lib_scores = X[:, FEATURES.index('lib_max')]
+                _lib_best_i = int(np.argmax(_lib_scores))
+                _lib_best_rank = int(np.flatnonzero(order == _lib_best_i)[0]) + 1
+
+                log(
+                    'LIB_DIAG', mid,
+                    'global=', round(float(lib_max), 4),
+                    'top1=', round(float(_lib_scores[order[0]]), 4),
+                    'top5=', [
+                        (
+                            int(i),
+                            str(C.key[i]),
+                            round(float(_lib_scores[i]), 4),
+                            round(float(score[i]), 4)
+                        )
+                        for i in order[:5]
+                    ],
+                    'best_lib_rank=', _lib_best_rank,
+                    'best_lib=', round(float(_lib_scores[_lib_best_i]), 4)
+                )
+
+    # Identify the actual reference spectrum behind the best library hit.
+                from casmi import spectra as _spmod
+
+                _E = V.E
+                _L = _E.L
+                _sid = int(C.train_sid[_lib_best_i])
+
+                _best_ref_score = -1.0
+                _best_ref_idx = -1
+                _best_ref_qi = -1
+
+                if _sid >= 0:
+                    for _qi, _q in enumerate(spectra[:_E.cfg.max_query_spectra]):
+                        _qm, _qp = _L.prep(_q['mz'], _q['it'], _E.cfg.search)
+                        if len(_qm) == 0:
+                            continue
+
+                        _lc = _L.window(
+                            target, _E.cfg.search.ppm_win,
+                            mode=int(_q['mode'])
+                        )
+                        _lc = _lc[_L.sid[_lc] == _sid]
+
+                        if len(_lc) == 0:
+                            continue
+
+                        _cfg = _E.cfg.search
+                        _sc = _spmod.search(
+                            _qm, _qp, _lc,
+                            _L.off, _L.mz, _L.it,
+                            _cfg.tol, _cfg.ppm_tol,
+                            _cfg.floor, _cfg.topk,
+                            _cfg.power, _cfg.ent_weight, 0
+                        )
+
+                        _j = int(np.argmax(_sc))
+                        if float(_sc[_j]) > _best_ref_score:
+                            _best_ref_score = float(_sc[_j])
+                            _best_ref_idx = int(_lc[_j])
+                            _best_ref_qi = _qi
+
+                if _best_ref_idx >= 0:
+                    _r = _L.meta.iloc[_best_ref_idx]
+                    _libs = [
+                        'enveda-180', 'pluskal_ms2', 'riken', 'gnps',
+                        'massbank', 'mona', 'spectraverse', 'msdial',
+                        'drug_plus', 'enveda-np-examples', 'masaryk'
+                    ]
+
+                    log(
+                        'LIB_REF', mid,
+                        'candidate=', C.key[_lib_best_i],
+                        'score=', round(_best_ref_score, 7),
+                        'train_row=', _best_ref_idx,
+                        'library=', _libs[int(_r['lib'])],
+                        'instrument=', int(_r['instr']),
+                        'adduct=', str(_r['adduct']),
+                        'precursor=', round(float(_r['precursor_mz']), 5),
+                        'precursor_error_ppm=', round(float(_r['precursor_error_ppm']), 3),
+                        'ce_mean=', round(float(_r['ce_mean']), 2),
+                        'n_clean=', int(_r['n_clean']),
+                        'num_peaks=', int(_r['num_peaks']),
+                        'query_index=', _best_ref_qi
+                    )
                 seen = set()
                 for i in order:
                     k = C.key[i]
