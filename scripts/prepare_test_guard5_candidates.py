@@ -653,7 +653,10 @@ def main() -> None:
                 formulas,
                 mass_tier_root,
                 ppm=10.0,
-                excluded_structure_keys=excluded_structure_keys,
+                excluded_structure_keys=(
+                    excluded_structure_keys
+                    | conflicts
+                ),
             )
         )
 
