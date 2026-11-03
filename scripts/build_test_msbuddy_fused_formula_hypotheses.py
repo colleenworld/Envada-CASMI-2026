@@ -383,10 +383,16 @@ def build_fusion_candidates(
         errors="coerce",
     ).fillna(0.0)
 
-    msbuddy = msbuddy.rename(
-        columns={
-            "supporting_spectra": "msbuddy_supporting_spectra",
-        }
+    msbuddy = (
+        msbuddy.loc[
+            msbuddy["molecule_rank"] <= TOP_K_SOURCE
+        ]
+        .rename(
+            columns={
+                "supporting_spectra": "msbuddy_supporting_spectra",
+            }
+        )
+        .copy()
     )
 
     candidates = production.merge(
@@ -945,34 +951,6 @@ def main() -> None:
     candidates = build_fusion_candidates(
         production,
         msbuddy,
-    )
-
-    candidates = (
-        candidates.sort_values(
-            [
-                "molecule_id",
-                "fusion_score",
-                "candidate_formula",
-            ],
-            ascending=[
-                True,
-                False,
-                True,
-            ],
-            kind="stable",
-        )
-        .reset_index(
-            drop=True
-        )
-    )
-
-    candidates["fusion_rank"] = (
-        candidates.groupby(
-            "molecule_id",
-            sort=False,
-        )
-        .cumcount()
-        + 1
     )
 
     fused = build_fused_hypotheses(
