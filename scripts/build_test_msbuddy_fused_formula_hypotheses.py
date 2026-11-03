@@ -47,6 +47,13 @@ FUSED_HYPOTHESES_PATH = (
 TOP_K_SOURCE = 5
 TOP_K_FINAL = 3
 
+MIST_SUPPORTED_ADDUCTS = {
+    "[M+H]+",
+    "[M+Na]+",
+    "[M+NH4]+",
+    "[M+K]+",
+}
+
 PRODUCTION_WEIGHT = 0.5
 MSBUDDY_WEIGHT = 0.5
 AGREEMENT_BONUS = 0.0
@@ -566,7 +573,13 @@ def reconstruct_hypothesis(
     except ValueError:
         return None
 
-    candidates = selected.copy()
+    candidates = selected.loc[
+        selected["ionization_mode"].astype(str).eq("positive")
+        & selected["adduct"].isin(MIST_SUPPORTED_ADDUCTS)
+    ].copy()
+
+    if candidates.empty:
+        return None
 
     candidates["selected_mass_error_ppm"] = [
         ppm_error(
@@ -735,7 +748,13 @@ def build_fused_hypotheses(
             )
         )
 
-        if existing is not None:
+        if (
+            existing is not None
+            and str(existing.get("selected_ionization_mode", ""))
+            == "positive"
+            and str(existing.get("selected_adduct", ""))
+            in MIST_SUPPORTED_ADDUCTS
+        ):
             hypothesis = existing.copy()
             hypothesis["hypothesis_spec"] = (
                 f"{molecule_id}__fused_{fusion_rank:04d}"
