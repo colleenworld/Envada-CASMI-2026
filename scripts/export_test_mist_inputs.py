@@ -24,10 +24,12 @@ TEST_PATH = (
     / "data/raw/test.parquet"
 )
 
-HYPOTHESES_PATH = (
-    PROJECT_ROOT
-    / "data/processed/test/"
-      "multispectrum_formula_hypotheses.parquet"
+HYPOTHESES_PATH = Path(
+    os.environ.get(
+        "CASMI26_FORMULA_HYPOTHESES_PATH",
+        PROJECT_ROOT
+        / "data/processed/test/multispectrum_formula_hypotheses.parquet",
+    )
 )
 
 OUTPUT_DIR = (
