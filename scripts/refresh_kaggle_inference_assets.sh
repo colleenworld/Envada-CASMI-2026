@@ -150,7 +150,7 @@ echo "Phase 2 project code copied and verified."
 # Build a wheel for the Kaggle ABI in the official manylinux image, then let
 # pip resolve MSBuddy and its remaining dependencies using the completed wheelhouse.
 BRAIN_WHEEL="$(find "$WHEELHOUSE" -maxdepth 1 -type f \
-  -name "brain_isotopic_distribution-*-${KAGGLE_PYTHON_ABI}-${KAGGLE_PYTHON_ABI}-${KAGGLE_MANYLINUX_PLATFORM}.whl" \
+  -name "brain_isotopic_distribution-*-${KAGGLE_PYTHON_ABI}-${KAGGLE_PYTHON_ABI}-*${KAGGLE_MANYLINUX_PLATFORM}.whl" \
   -print -quit)"
 if [[ -z "$BRAIN_WHEEL" ]]; then
   command -v docker >/dev/null 2>&1 || fail "Docker is required to build the CPython ${KAGGLE_PYTHON_ABI} brain-isotopic-distribution wheel"
@@ -182,7 +182,7 @@ if [[ -z "$BRAIN_WHEEL" ]]; then
 fi
 
 BRAIN_WHEEL="$(find "$WHEELHOUSE" -maxdepth 1 -type f \
-  -name "brain_isotopic_distribution-*-${KAGGLE_PYTHON_ABI}-${KAGGLE_PYTHON_ABI}-${KAGGLE_MANYLINUX_PLATFORM}.whl" \
+  -name "brain_isotopic_distribution-*-${KAGGLE_PYTHON_ABI}-${KAGGLE_PYTHON_ABI}-*${KAGGLE_MANYLINUX_PLATFORM}.whl" \
   -print -quit)"
 [[ -n "$BRAIN_WHEEL" ]] || fail "No brain-isotopic-distribution wheel was built for ${KAGGLE_PYTHON_ABI} / ${KAGGLE_MANYLINUX_PLATFORM}"
 
