@@ -104,7 +104,7 @@ MIST_SOURCE = PROJECT_SOURCE.parent / "MIST"
 if not MIST_SOURCE.is_dir():
     raise FileNotFoundError(f"Expected MIST beside project snapshot: {MIST_SOURCE}")
 
-MASS_TIER_ENTRY = find_file("pubchem_tier__pc_mass.npy")
+MASS_TIER_ENTRY = find_file("pubchem_tier__pc_mass.npy", "casmi26-pubchem-tier")
 PUBCHEM_MASS_TIER_ROOT = MASS_TIER_ENTRY.parent
 for asset_name in ("pubchem_tier__pc_off.npy", "pubchem_tier__pc_smiles.npy"):
     if not (PUBCHEM_MASS_TIER_ROOT / asset_name).is_file():
