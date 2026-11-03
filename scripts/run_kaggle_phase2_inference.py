@@ -129,6 +129,25 @@ def ensure_msbuddy(
         )
     print("MSBuddy:", actual)
 
+    import_check = subprocess.run(
+        [
+            python,
+            "-c",
+            "from msbuddy import Msbuddy, MsbuddyConfig; "
+            "from msbuddy.base import MetaFeature, Spectrum",
+        ],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+    )
+    if import_check.returncode != 0:
+        raise RuntimeError(
+            "MSBuddy 0.3.16 is installed but its runtime imports failed. "
+            "Check that all MSBuddy dependencies are available in the offline "
+            "wheelhouse.\\n"
+            + import_check.stderr
+        )
+
 
 def main() -> None:
     args = parse_args()
