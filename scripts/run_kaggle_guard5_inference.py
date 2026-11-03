@@ -160,10 +160,7 @@ def main() -> None:
             )
         )
 
-    raw_dir = (
-        project_root
-        / "data/raw"
-    )
+    raw_dir = project_root / "data/raw"
     raw_dir.mkdir(
         parents=True,
         exist_ok=True,
@@ -184,100 +181,57 @@ def main() -> None:
             target_sample_path,
         )
 
-    test_output = (
-        project_root
-        / "data/processed/test"
-    )
+    test_output = project_root / "data/processed/test"
 
     if test_output.exists():
-        shutil.rmtree(
-            test_output
-        )
+        shutil.rmtree(test_output)
 
-    submission = (
-        project_root
-        / "submission.csv"
-    )
+    submission = project_root / "submission.csv"
 
     if submission.exists():
         submission.unlink()
 
     env = os.environ.copy()
-    env[
-        "CASMI26_PROJECT_ROOT"
-    ] = str(
-        project_root
-    )
-    env[
-        "MIST_ROOT"
-    ] = str(
-        mist_root
-    )
+    env["CASMI26_PROJECT_ROOT"] = str(project_root)
+    env["MIST_ROOT"] = str(mist_root)
 
     if args.phase2:
-        env[
-            "CASMI26_FORMULA_HYPOTHESES_PATH"
-        ] = str(
+        env["CASMI26_FORMULA_HYPOTHESES_PATH"] = str(
             project_root
             / "data/processed/test/"
               "multispectrum_formula_hypotheses_fused.parquet"
         )
-        env[
-            "CASMI26_USE_PUBCHEM_MASS_TIER"
-        ] = "1"
-        env[
-            "CASMI26_PUBCHEM_MASS_TIER_ROOT"
-        ] = str(
+        env["CASMI26_USE_PUBCHEM_MASS_TIER"] = "1"
+        env["CASMI26_PUBCHEM_MASS_TIER_ROOT"] = str(
             mass_tier_root
         )
         # MSBuddy-only formulas may not exist in the formula-specific
         # PubChem buckets; mass-tier candidates provide their fallback.
-        env[
-            "CASMI26_ALLOW_PARTIAL_PUBCHEM"
-        ] = "1"
+        env["CASMI26_ALLOW_PARTIAL_PUBCHEM"] = "1"
 
     # Preserve the virtual-environment interpreter path.
     # Resolving a venv symlink can fall back to the system interpreter.
     python = sys.executable
+    env["MIST_PYTHON"] = python
 
-    env[
-        "MIST_PYTHON"
-    ] = python
+    pythonpath = str(project_root / "src")
 
-    pythonpath = str(
-        project_root
-        / "src"
-    )
-
-    if env.get(
-        "PYTHONPATH"
-    ):
+    if env.get("PYTHONPATH"):
         pythonpath += (
             os.pathsep
-            + env[
-                "PYTHONPATH"
-            ]
+            + env["PYTHONPATH"]
         )
 
-    env[
-        "PYTHONPATH"
-    ] = pythonpath
+    env["PYTHONPATH"] = pythonpath
 
-    #
     # Kaggle inference assets include an offline wheelhouse. The guard-5
     # candidate stage requires RDKit, which is not guaranteed to be in
     # the base runtime. Install packaged wheels before running stages.
-    #
-    wheelhouse = (
-        mist_root.parent
-        / "wheelhouse"
-    )
+    wheelhouse = mist_root.parent / "wheelhouse"
 
     if wheelhouse.exists():
         wheels = sorted(
-            wheelhouse.glob(
-                "*.whl"
-            )
+            wheelhouse.glob("*.whl")
         )
 
         if wheels:
@@ -289,13 +243,9 @@ def main() -> None:
                     "install",
                     "--no-index",
                     "--find-links",
-                    str(
-                        wheelhouse
-                    ),
+                    str(wheelhouse),
                     *[
-                        str(
-                            wheel
-                        )
+                        str(wheel)
                         for wheel in wheels
                     ],
                 ],
@@ -360,22 +310,22 @@ def main() -> None:
                 python,
                 "scripts/prepare_test_guard5_candidates.py",
             ],
-        [
-            python,
-            "scripts/score_test_guard5_spectrum_fingerprint.py",
-        ],
-        [
-            python,
-            "scripts/build_test_learned_ranker_features.py",
-        ],
-        [
-            python,
-            "scripts/rank_test_learned_ranker.py",
-        ],
-        [
-            python,
-            "scripts/rank_test_negative_retrieval.py",
-        ],
+            [
+                python,
+                "scripts/score_test_guard5_spectrum_fingerprint.py",
+            ],
+            [
+                python,
+                "scripts/build_test_learned_ranker_features.py",
+            ],
+            [
+                python,
+                "scripts/rank_test_learned_ranker.py",
+            ],
+            [
+                python,
+                "scripts/rank_test_negative_retrieval.py",
+            ],
             [
                 python,
                 "scripts/build_submission.py",
