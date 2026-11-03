@@ -170,15 +170,9 @@ os.environ["PYTHONPATH"] = os.pathsep.join(
 sys.path.insert(0, str(WORK_ROOT / "src"))
 sys.path.insert(0, str(MIST_SOURCE / "src"))
 
-from casmi26.spectra.binning import bin_spectrum
-from casmi26.chemistry.adducts import neutral_mass
-print("CASMI imports: OK")
-
-import torch
-print("torch:", torch.__version__)
-
-from mist import utils as mist_utils
-print("MIST import: OK")
+print("Project source path:", WORK_ROOT / "src")
+print("MIST source path:", MIST_SOURCE / "src")
+print("Dependency installation and runtime imports are handled by the selected pipeline.")
 
 # %%
 def run(cmd, cwd=WORK_ROOT, env=None):
