@@ -26,6 +26,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pubchem-mass-tier-root", type=Path, required=True)
     parser.add_argument("--wheelhouse", type=Path)
     parser.add_argument("--msbuddy-wheel", type=Path)
+    parser.add_argument(
+        "--quick-test",
+        action="store_true",
+        help=(
+            "Run a fast smoke pipeline that skips heavy MIST/MSBuddy "
+            "stages and produces a valid submission via retrieval fallback."
+        ),
+    )
+    parser.add_argument(
+        "--final-submission",
+        action="store_true",
+        help=(
+            "Enable the heavy full-candidate ranking path intended for "
+            "final Kaggle submissions. Default mode is optimized for "
+            "faster iteration runs."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -153,6 +170,37 @@ def ensure_msbuddy(
     ensure_msbuddy_import(python, cwd)
 
 
+def write_empty_positive_ranking(
+    test_root: Path,
+) -> None:
+    output_path = (
+        test_root
+        / "positive_contrastive_ranked_candidates.parquet"
+    )
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    pd.DataFrame(
+        columns=[
+            "molecule_id",
+            "hypothesis_spec",
+            "candidate_formula",
+            "candidate_inchikey14",
+            "candidate_smiles",
+            "selected_adduct",
+            "selected_mass_error_ppm",
+            "contrastive_distance",
+            "final_score",
+            "rank",
+        ]
+    ).to_parquet(
+        output_path,
+        index=False,
+    )
+    print("Wrote empty positive ranking:", output_path)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -188,31 +236,39 @@ def main() -> None:
     )
 
     required = [
-        project_root / "scripts/build_test_multispectrum_formula_hypotheses.py",
-        project_root / "scripts/build_test_msbuddy_fused_formula_hypotheses.py",
-        project_root / "scripts/export_test_mist_inputs.py",
-        project_root / "scripts/filter_test_mist_supported.py",
-        project_root / "scripts/build_test_contrastive_candidates.py",
-        project_root / "scripts/rank_test_positive_contrastive.py",
         project_root / "scripts/rank_test_negative_retrieval.py",
         project_root / "scripts/build_submission.py",
-        project_root / "src/casmi26/chemistry/inference.py",
-        project_root / "src/casmi26/pubchem/mass_tier.py",
-        project_root / "src/casmi26/pubchem/mass_tier_candidates.py",
-        project_root / "data/processed/formula_index/training_coconut_formulas.parquet",
-        project_root / "data/processed/structure_index/structures.parquet",
         project_root / "data/processed/retrieval_index/metadata.parquet",
         project_root / "data/processed/retrieval_index/vectors.npz",
-        project_root / "data/external/coconut/coconut_approved.parquet",
-        mist_root / "src/mist/subformulae/assign_subformulae.py",
-        mist_root / "src/mist/retrieval_contrast.py",
-        checkpoint,
         test_path,
         sample_path,
-        mass_tier_root / "pubchem_tier__pc_mass.npy",
-        mass_tier_root / "pubchem_tier__pc_off.npy",
-        mass_tier_root / "pubchem_tier__pc_smiles.npy",
     ]
+    if not args.quick_test:
+        required.extend(
+            [
+                project_root / "scripts/build_test_multispectrum_formula_hypotheses.py",
+                project_root / "scripts/build_test_msbuddy_fused_formula_hypotheses.py",
+                project_root / "scripts/export_test_mist_inputs.py",
+                project_root / "scripts/filter_test_mist_supported.py",
+                project_root / "scripts/build_test_contrastive_candidates.py",
+                project_root / "scripts/rank_test_positive_contrastive.py",
+                project_root / "src/casmi26/chemistry/inference.py",
+                project_root / "src/casmi26/pubchem/mass_tier.py",
+                project_root / "src/casmi26/pubchem/mass_tier_candidates.py",
+                project_root / "data/processed/formula_index/training_coconut_formulas.parquet",
+                project_root / "data/processed/structure_index/structures.parquet",
+                project_root / "data/external/coconut/coconut_approved.parquet",
+                project_root / "data/external/msbuddy/common_db_v0.2.4.joblib",
+                project_root / "data/external/msbuddy/formula_db_v0.2.4.joblib",
+                project_root / "data/external/msbuddy/ml_v0.3.0.joblib",
+                mist_root / "src/mist/subformulae/assign_subformulae.py",
+                mist_root / "src/mist/retrieval_contrast.py",
+                checkpoint,
+                mass_tier_root / "pc_mass.npy",
+                mass_tier_root / "pc_off.npy",
+                mass_tier_root / "pc_smiles.npy",
+            ]
+        )
     missing = [path for path in required if not path.exists()]
     if missing:
         raise FileNotFoundError(
@@ -220,9 +276,10 @@ def main() -> None:
             + "\n  ".join(str(path) for path in missing)
         )
 
-    # Validate dependencies before clearing any previous test artifacts.
-    ensure_rdkit(sys.executable, wheelhouse, project_root)
-    ensure_msbuddy(sys.executable, wheelhouse, msbuddy_wheel, project_root)
+    if not args.quick_test:
+        # Validate dependencies before clearing any previous test artifacts.
+        ensure_rdkit(sys.executable, wheelhouse, project_root)
+        ensure_msbuddy(sys.executable, wheelhouse, msbuddy_wheel, project_root)
 
     raw_root.mkdir(parents=True, exist_ok=True)
     shutil.copy2(test_path, raw_root / "test.parquet")
@@ -241,6 +298,28 @@ def main() -> None:
     env["CASMI26_FORMULA_HYPOTHESES_PATH"] = str(fused_hypotheses)
     env["CASMI26_USE_PUBCHEM_MASS_TIER"] = "1"
     env["CASMI26_PUBCHEM_MASS_TIER_ROOT"] = str(mass_tier_root)
+    if args.quick_test:
+        env["CASMI26_RETRIEVAL_INCLUDE_POSITIVE_MOLECULES"] = "1"
+        env["CASMI26_SUBMISSION_FUSION_MODE"] = "strict"
+        env["CASMI26_MAX_STRUCTURES_PER_FORMULA"] = "0"
+        retrieval_top_k = "0"
+        mode_label = "quick-test"
+    elif args.final_submission:
+        env["CASMI26_RETRIEVAL_INCLUDE_POSITIVE_MOLECULES"] = "1"
+        env["CASMI26_SUBMISSION_FUSION_MODE"] = "rrf"
+        env["CASMI26_SUBMISSION_RRF_K"] = "60.0"
+        env["CASMI26_SUBMISSION_POSITIVE_WEIGHT"] = "1.0"
+        env["CASMI26_SUBMISSION_FALLBACK_WEIGHT"] = "1.0"
+        env["CASMI26_MAX_STRUCTURES_PER_FORMULA"] = "0"
+        retrieval_top_k = "500"
+        mode_label = "final-submission"
+    else:
+        env["CASMI26_RETRIEVAL_INCLUDE_POSITIVE_MOLECULES"] = "0"
+        env["CASMI26_SUBMISSION_FUSION_MODE"] = "strict"
+        env["CASMI26_MAX_STRUCTURES_PER_FORMULA"] = "250"
+        retrieval_top_k = "200"
+        mode_label = "iteration-fast"
+
     env["MIST_ROOT"] = str(mist_root)
     env["MIST_PYTHON"] = sys.executable
 
@@ -255,12 +334,45 @@ def main() -> None:
 
     print("CASMI26 Phase 2 — original MIST/Morgan-4096 pipeline")
     print("=" * 66)
+    print("Run mode:", mode_label)
     print("Project root:", project_root)
     print("MIST root:", mist_root)
     print("PubChem mass-tier root:", mass_tier_root)
     print("Test rows:", len(pd.read_parquet(test_path)))
-    print("MSBuddy: 0.3.16")
-    print("Ranking: original MIST Morgan-4096; weights unchanged")
+    if not args.quick_test:
+        print("MSBuddy: 0.3.16")
+    if args.quick_test:
+        print("Ranking: fallback-only quick test path")
+    elif args.final_submission:
+        print("Ranking: full retrieval+RRF fusion (heavy final mode)")
+    else:
+        print("Ranking: strict branch ownership (fast iteration mode)")
+    print("MIST retrieval top-k:", retrieval_top_k)
+    print(
+        "Formula structure cap:",
+        env["CASMI26_MAX_STRUCTURES_PER_FORMULA"],
+    )
+
+    if args.quick_test:
+        write_empty_positive_ranking(test_root)
+        run(
+            [python, "scripts/rank_test_negative_retrieval.py"],
+            cwd=project_root,
+            env=env,
+        )
+        run(
+            [python, "scripts/build_submission.py"],
+            cwd=project_root,
+            env=env,
+        )
+        if not submission.is_file():
+            raise RuntimeError(
+                "Quick-test pipeline finished without creating submission.csv."
+            )
+        print()
+        print("Quick-test complete:", submission)
+        print("Submission rows:", len(pd.read_csv(submission)))
+        return
 
     run(
         [python, "scripts/build_test_multispectrum_formula_hypotheses.py"],
@@ -303,7 +415,7 @@ def main() -> None:
                 "--output-dir",
                 str(subformula_root),
                 "--feature-id",
-                "FEATURE_ID",
+                "TITLE",
                 "--num-workers",
                 "0",
             ],
@@ -351,7 +463,7 @@ def main() -> None:
                 "--num-workers",
                 "0",
                 "--top-k",
-                "500",
+                retrieval_top_k,
             ],
             cwd=mist_root,
             env=env,

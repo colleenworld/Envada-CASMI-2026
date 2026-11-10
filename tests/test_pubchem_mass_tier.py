@@ -46,18 +46,18 @@ def write_mass_tier(
         offsets.append(len(encoded))
 
     np.save(
-        root / "pubchem_tier__pc_mass.npy",
+        root / "pc_mass.npy",
         masses,
     )
     np.save(
-        root / "pubchem_tier__pc_off.npy",
+        root / "pc_off.npy",
         np.asarray(
             offsets,
             dtype=np.uint64,
         ),
     )
     np.save(
-        root / "pubchem_tier__pc_smiles.npy",
+        root / "pc_smiles.npy",
         np.frombuffer(
             bytes(encoded),
             dtype=np.uint8,

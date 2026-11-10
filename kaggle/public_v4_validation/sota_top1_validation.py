@@ -80,6 +80,21 @@ def find(pattern, optional=False):
         raise FileNotFoundError(f"Could not find required dataset file: {pattern}")
     return hits[0] if hits else None
 
+def ensure_asset_symlink(source: str, destination: str) -> None:
+    """Create or repair a symlink to a required asset file."""
+    if not os.path.exists(source):
+        raise FileNotFoundError(f"Required asset does not exist: {source}")
+    if os.path.islink(destination):
+        if (
+            os.path.exists(destination)
+            and os.path.realpath(destination) == os.path.realpath(source)
+        ):
+            return
+        os.unlink(destination)
+    elif os.path.exists(destination):
+        return
+    os.symlink(source, destination)
+
 def sha256(path, n=1 << 22):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -192,7 +207,19 @@ def _fp_init():
     from rdkit import RDLogger
     from rdkit.Chem import rdFingerprintGenerator
     RDLogger.DisableLog("rdApp.*")
-    _g["bits"] = np.load(find("fp_bits.npy"))
+    coco_fp_path = find("coco_fp.npy")
+    bits_path = os.path.join(os.path.dirname(coco_fp_path), "fp_bits.npy")
+    bits = np.load(bits_path)
+    fingerprint_size = 4096 + 4096 + 2048 + 167
+    if (
+        bits.ndim != 1
+        or not np.issubdtype(bits.dtype, np.integer)
+        or not len(bits)
+        or bits.min() < 0
+        or bits.max() >= fingerprint_size
+    ):
+        raise ValueError(f"Invalid COCONUT fingerprint bit indices: {bits_path}")
+    _g["bits"] = bits
     _g["m2"] = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=4096)
     _g["m3"] = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=4096)
     _g["rk"] = rdFingerprintGenerator.GetRDKitFPGenerator(fpSize=2048, maxPath=6)
@@ -244,8 +271,20 @@ def build_pool(L, workers):
     log(f"COCONUT {len(co_keys):,}; training structures to fingerprint {len(tr):,}")
     with MPool(workers) as mp:
         res = mp.map(fp_and_mass, list(tr.smi), chunksize=500)
-    ok = np.array([r is not None for r in res])
-    tr_fp = np.stack([r[0] for r in res if r is not None]); tr_mass = np.array([r[1] for r in res if r is not None])
+    ok = np.fromiter(
+        (r is not None for r in res),
+        dtype=bool,
+        count=len(res),
+    )
+    valid_results = [r for r in res if r is not None]
+    log(f"training fingerprints {len(valid_results):,}/{len(res):,}")
+    if valid_results:
+        tr_fp = np.stack([r[0] for r in valid_results])
+        tr_mass = np.array([r[1] for r in valid_results])
+    else:
+        tr_fp = co_fp[:0]
+        tr_mass = co_mass[:0]
+        log("No training fingerprints generated; using asset candidates only")
     fp = np.vstack([co_fp, tr_fp]); mass = np.concatenate([co_mass, tr_mass])
     keys = np.concatenate([co_keys, tr.ik.values[ok]]); smis = np.concatenate([co_smi, tr.smi.values[ok]])
     good = np.isfinite(mass)
@@ -2129,7 +2168,7 @@ CFG = dict(
 # ── SOTA Top-1 (0.455 -> 0.500+) Plan B Master Breakthrough Overrides ─────────
 CFG.update({
     # Proven public-LB 0.420 configuration from the upstream ablation.
-    'VERSION': 'v18-proven-0420-config',
+    'VERSION': 'v18-fuse-alpha-0.30-ablation',
     'E2_RANK2': False,
     'POP_MU': 0.25,
     'FRAG_LAM': 0.5,
@@ -2147,7 +2186,7 @@ CFG.update({
     'FUSE_ENG_K': 40,
     'ICE_UNION_K': 40,
     'FILL_25': True,
-    'FUSE_ALPHA': 0.60,
+    'FUSE_ALPHA': 0.30,
     'FUSE_KRR': 3.0,
     'ICE_SURROGATE': True,
     'GL_SURROGATE': True
@@ -2288,8 +2327,7 @@ dump('pc', PC)
 sys.path.insert(0, V4CODE)
 os.makedirs('work', exist_ok=True)
 for f in ['pool_meta.parquet', 'pool_fp.npy', 'pool_frag_off.npy', 'pool_frag_mass.npy', 'fp_bits.npy', 'train_structs.parquet', 'train_fp_sel.npy']:
-    if not os.path.exists(f'work/{f}'):
-        os.symlink(os.path.join(POOL_DIR, f), f'work/{f}')
+    ensure_asset_symlink(os.path.join(POOL_DIR, f), f'work/{f}')
 
 from casmi.build import build_spec_cache
 build_spec_cache(os.path.join(COMP, 'train.parquet'), 'work')

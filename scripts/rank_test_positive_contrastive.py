@@ -45,9 +45,10 @@ OUTPUT_PATH = (
 
 
 #
-# Frozen on v1, validated once on v2.
+# Selected by a joint sweep on the frozen, structure-disjoint v1/v2
+# validation sets using the production structure-collapse and ranking logic.
 #
-MASS_PENALTY = 0.020
+MASS_PENALTY = 0.075
 
 
 OUTPUT_COLUMNS = [

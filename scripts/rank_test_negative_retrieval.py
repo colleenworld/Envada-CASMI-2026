@@ -61,6 +61,13 @@ MAX_MZ = 1500.0
 # Frozen retrieval setting from the validated retrieval baseline.
 #
 NEUTRAL_MASS_TOLERANCE_DA = 0.01
+RETRIEVAL_INCLUDE_POSITIVE_MOLECULES = (
+    os.environ.get(
+        "CASMI26_RETRIEVAL_INCLUDE_POSITIVE_MOLECULES",
+        "0",
+    ).strip()
+    == "1"
+)
 
 
 OUTPUT_COLUMNS = [
@@ -356,10 +363,15 @@ def main():
             "all test molecules will use retrieval fallback."
         )
 
-    fallback_molecules = (
-        all_molecules
-        - positive_molecules
-    )
+    if RETRIEVAL_INCLUDE_POSITIVE_MOLECULES:
+        target_molecules = set(
+            all_molecules
+        )
+    else:
+        target_molecules = (
+            all_molecules
+            - positive_molecules
+        )
 
     print(
         "Total test molecules:",
@@ -373,7 +385,7 @@ def main():
 
     print(
         "Fallback molecules:",
-        len(fallback_molecules),
+        len(target_molecules),
     )
 
     queries = test[
@@ -381,7 +393,7 @@ def main():
             "molecule_id"
         ]
         .isin(
-            fallback_molecules
+            target_molecules
         )
     ].copy()
 
@@ -424,13 +436,13 @@ def main():
     #
     # An empty fallback branch is valid.
     #
-    if not fallback_molecules:
+    if not target_molecules:
         write_empty_output()
         return
 
     if queries.empty:
         raise RuntimeError(
-            "Fallback molecules exist, but no query spectra "
+            "Target molecules exist, but no query spectra "
             "were found for them."
         )
 
@@ -541,7 +553,7 @@ def main():
         molecule_id: {}
         for molecule_id
         in sorted(
-            fallback_molecules
+            target_molecules
         )
     }
 
@@ -559,9 +571,14 @@ def main():
     }
 
     print()
-    print(
-        "Searching fallback spectra..."
-    )
+    if RETRIEVAL_INCLUDE_POSITIVE_MOLECULES:
+        print(
+            "Searching retrieval spectra for all molecules..."
+        )
+    else:
+        print(
+            "Searching fallback spectra..."
+        )
 
     for query_number, row in enumerate(
         queries.itertuples(
@@ -814,7 +831,7 @@ def main():
     )
 
     missing_rankings = sorted(
-        fallback_molecules
+        target_molecules
         - ranked_molecules
     )
 
@@ -957,7 +974,7 @@ def main():
     )
 
     missing_after_smiles = sorted(
-        fallback_molecules
+        target_molecules
         - ranked_molecules
     )
 

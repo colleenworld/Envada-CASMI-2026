@@ -57,12 +57,18 @@ ASSET_ROOT="$(cd "$ASSET_ROOT" && pwd)"
 PROJECT_ROOT="$ASSET_ROOT/project"
 MIST_ROOT="$ASSET_ROOT/MIST"
 WHEELHOUSE="$ASSET_ROOT/wheelhouse"
+MSBUDDY_DATA_TARGET="$PROJECT_ROOT/data/external/msbuddy"
+MSBUDDY_DATA_FILES=(
+  "common_db_v0.2.4.joblib"
+  "formula_db_v0.2.4.joblib"
+  "ml_v0.3.0.joblib"
+)
 PYTHON="${PYTHON:-python3}"
 KAGGLE_PYTHON_VERSION="${KAGGLE_PYTHON_VERSION:-3.13}"
 KAGGLE_PYTHON_ABI="${KAGGLE_PYTHON_ABI:-cp313}"
 KAGGLE_MANYLINUX_PLATFORM="${KAGGLE_MANYLINUX_PLATFORM:-manylinux_2_28_x86_64}"
 WHEEL_BUILD_IMAGE="${WHEEL_BUILD_IMAGE:-quay.io/pypa/manylinux_2_28_x86_64}"
-MESSAGE="Refresh CASMI26 Phase 2 inference assets (MSBuddy 0.3.16)"
+MESSAGE="Refresh CASMI26 inference assets (Phase 2 + learned ranker)"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -77,6 +83,30 @@ echo "Dataset ID:  $DATASET_ID"
 [[ -d "$MIST_ROOT" ]] || fail "Missing existing MIST directory: $MIST_ROOT"
 [[ -d "$WHEELHOUSE" ]] || fail "Missing existing wheelhouse: $WHEELHOUSE"
 [[ -f "$ASSET_ROOT/dataset-metadata.json" ]] || fail "Missing dataset-metadata.json in $ASSET_ROOT"
+
+MSBUDDY_DATA_SOURCE="${CASMI26_MSBUDDY_DATA_SOURCE:-}"
+if [[ -z "$MSBUDDY_DATA_SOURCE" ]]; then
+  for candidate in \
+    "$REPO_ROOT"/.venv/lib/python*/site-packages/msbuddy/data; do
+    if [[ -d "$candidate" ]]; then
+      MSBUDDY_DATA_SOURCE="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$MSBUDDY_DATA_SOURCE" ]]; then
+  MSBUDDY_DATA_SOURCE="$MSBUDDY_DATA_TARGET"
+fi
+[[ -d "$MSBUDDY_DATA_SOURCE" ]] || fail \
+  "Missing MSBuddy data source: $MSBUDDY_DATA_SOURCE (set CASMI26_MSBUDDY_DATA_SOURCE)"
+mkdir -p "$MSBUDDY_DATA_TARGET"
+for filename in "${MSBUDDY_DATA_FILES[@]}"; do
+  [[ -f "$MSBUDDY_DATA_SOURCE/$filename" ]] || fail \
+    "Missing MSBuddy data file: $MSBUDDY_DATA_SOURCE/$filename"
+  if [[ "$MSBUDDY_DATA_SOURCE" != "$MSBUDDY_DATA_TARGET" ]]; then
+    cp -p "$MSBUDDY_DATA_SOURCE/$filename" "$MSBUDDY_DATA_TARGET/$filename"
+  fi
+done
 
 "$PYTHON" - "$ASSET_ROOT/dataset-metadata.json" "$DATASET_ID" <<'PY'
 import json
@@ -98,6 +128,7 @@ PY
 # Preserve and verify the large assets already in the dataset.
 PRESERVED_FILES=(
   "data/processed/formula_index/training_coconut_formulas.parquet"
+  "data/processed/structure_index/training_structures.parquet"
   "data/processed/structure_index/structures.parquet"
   "data/processed/retrieval_index/metadata.parquet"
   "data/processed/retrieval_index/vectors.npz"
@@ -142,6 +173,54 @@ PHASE2_FILES=(
 for relative in "${PHASE2_FILES[@]}"; do
   [[ -f "$PROJECT_ROOT/$relative" ]] || fail "Phase 2 file did not copy: project/$relative"
 done
+
+GUARD5_FILES=(
+  "scripts/build_generated_test_formula_shortlist.py"
+  "scripts/apply_generated_test_formula_hypotheses.py"
+  "scripts/prepare_test_guard5_candidates.py"
+  "scripts/score_test_guard5_spectrum_fingerprint.py"
+  "scripts/build_test_learned_ranker_features.py"
+  "scripts/rank_test_learned_ranker.py"
+  "scripts/run_kaggle_guard5_inference.py"
+)
+for relative in "${GUARD5_FILES[@]}"; do
+  [[ -f "$PROJECT_ROOT/$relative" ]] || fail "Guard-5 file did not copy: project/$relative"
+done
+
+REPO_GUARD5_DATA=(
+  "data/processed/pubchem_formula_index"
+  "data/processed/spectrum_fingerprint/prototype/spectrum_to_morgan2048.pt"
+  "data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500/lgbm_ranker.txt"
+  "data/external/coconut/coconut_full.parquet"
+)
+for relative in "${REPO_GUARD5_DATA[@]}"; do
+  [[ -e "$REPO_ROOT/$relative" ]] || fail "Required learned-ranker asset is missing in repository: $relative"
+done
+
+echo
+echo "Copying learned-ranker inference assets from repository snapshot..."
+
+mkdir -p "$PROJECT_ROOT/data/processed/pubchem_formula_index"
+if command -v rsync >/dev/null 2>&1; then
+  rsync -a "$REPO_ROOT/data/processed/pubchem_formula_index/" "$PROJECT_ROOT/data/processed/pubchem_formula_index/"
+else
+  cp -a "$REPO_ROOT/data/processed/pubchem_formula_index/." "$PROJECT_ROOT/data/processed/pubchem_formula_index/"
+fi
+
+mkdir -p "$PROJECT_ROOT/data/processed/spectrum_fingerprint/prototype"
+cp -p \
+  "$REPO_ROOT/data/processed/spectrum_fingerprint/prototype/spectrum_to_morgan2048.pt" \
+  "$PROJECT_ROOT/data/processed/spectrum_fingerprint/prototype/spectrum_to_morgan2048.pt"
+
+mkdir -p "$PROJECT_ROOT/data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500"
+cp -p \
+  "$REPO_ROOT/data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500/lgbm_ranker.txt" \
+  "$PROJECT_ROOT/data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500/lgbm_ranker.txt"
+
+mkdir -p "$PROJECT_ROOT/data/external/coconut"
+cp -p \
+  "$REPO_ROOT/data/external/coconut/coconut_full.parquet" \
+  "$PROJECT_ROOT/data/external/coconut/coconut_full.parquet"
 
 echo
 echo "Phase 2 project code copied and verified."
@@ -230,11 +309,27 @@ echo "Wheelhouse now contains $(find "$WHEELHOUSE" -maxdepth 1 -type f -name '*.
 for relative in "${PHASE2_FILES[@]}"; do
   [[ -f "$PROJECT_ROOT/$relative" ]] || fail "Final preflight failed: project/$relative"
 done
+for relative in "${GUARD5_FILES[@]}"; do
+  [[ -f "$PROJECT_ROOT/$relative" ]] || fail "Final preflight failed: project/$relative"
+done
+for relative in \
+  "data/processed/pubchem_formula_index/formula_buckets.parquet" \
+  "data/processed/pubchem_formula_index/candidates/bucket-000.parquet" \
+  "data/processed/spectrum_fingerprint/prototype/spectrum_to_morgan2048.pt" \
+  "data/processed/diagnostics/large_validation_audit/true_formula_neighbor_benchmark/learned_ranker_top500/lgbm_ranker.txt" \
+  "data/external/coconut/coconut_full.parquet"; do
+  [[ -f "$PROJECT_ROOT/$relative" ]] || fail "Final preflight failed: project/$relative"
+done
 for filename in \
-  pubchem_tier__pc_mass.npy \
-  pubchem_tier__pc_off.npy \
-  pubchem_tier__pc_smiles.npy; do
+  pc_mass.npy \
+  pc_off.npy \
+  pc_smiles.npy; do
   echo "Separate PubChem input required in Kaggle: $filename"
+done
+for filename in "${MSBUDDY_DATA_FILES[@]}"; do
+  [[ -f "$MSBUDDY_DATA_TARGET/$filename" ]] || fail \
+    "Final preflight failed: project/data/external/msbuddy/$filename"
+  echo "Packaged MSBuddy data: $filename"
 done
 
 echo

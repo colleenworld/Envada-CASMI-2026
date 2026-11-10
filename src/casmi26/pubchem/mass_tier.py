@@ -18,9 +18,9 @@ class PubChemMassTier:
         cls,
         root: Path,
     ) -> "PubChemMassTier":
-        mass_path = root / "pubchem_tier__pc_mass.npy"
-        off_path = root / "pubchem_tier__pc_off.npy"
-        smiles_path = root / "pubchem_tier__pc_smiles.npy"
+        mass_path = root / "pc_mass.npy"
+        off_path = root / "pc_off.npy"
+        smiles_path = root / "pc_smiles.npy"
 
         for path in [
             mass_path,

@@ -70,6 +70,8 @@ KAGGLE_INPUT = Path("/kaggle/input")
 WORKING = Path("/kaggle/working")
 WORK_ROOT = WORKING / "casmi26"
 USE_PHASE2 = True
+FINAL_SUBMISSION_MODE = True
+QUICK_TEST_MODE = False
 
 print("Python:", sys.version)
 print("Executable:", sys.executable)
@@ -104,9 +106,9 @@ MIST_SOURCE = PROJECT_SOURCE.parent / "MIST"
 if not MIST_SOURCE.is_dir():
     raise FileNotFoundError(f"Expected MIST beside project snapshot: {MIST_SOURCE}")
 
-MASS_TIER_ENTRY = find_file("pubchem_tier__pc_mass.npy", "casmi26-pubchem-tier")
+MASS_TIER_ENTRY = find_file("pc_mass.npy", "casmi26-pubchem-tier")
 PUBCHEM_MASS_TIER_ROOT = MASS_TIER_ENTRY.parent
-for asset_name in ("pubchem_tier__pc_off.npy", "pubchem_tier__pc_smiles.npy"):
+for asset_name in ("pc_off.npy", "pc_smiles.npy"):
     if not (PUBCHEM_MASS_TIER_ROOT / asset_name).is_file():
         raise FileNotFoundError(PUBCHEM_MASS_TIER_ROOT / asset_name)
 
@@ -244,6 +246,12 @@ PIPELINE_ENV = {
 # The MIST checkpoint, Morgan-4096 retrieval, ranking weights, and negative-mode fallback are unchanged.
 #
 # Set `USE_PHASE2 = False` to reproduce the original 0.403 workflow.
+#
+# Set `QUICK_TEST_MODE = True` for a bounded <20-minute smoke run that skips
+# the heavy MIST/MSBuddy path and validates end-to-end submission assembly.
+#
+# `FINAL_SUBMISSION_MODE = True` enables the heavier full-retrieval RRF fusion
+# path. Leave it `False` for faster iteration runs.
 
 # %%
 if USE_PHASE2:
@@ -257,6 +265,10 @@ if USE_PHASE2:
         "--pubchem-mass-tier-root", str(PUBCHEM_MASS_TIER_ROOT),
         "--wheelhouse", str(WHEELHOUSE),
     ]
+    if QUICK_TEST_MODE:
+        command.append("--quick-test")
+    if FINAL_SUBMISSION_MODE:
+        command.append("--final-submission")
     if MSBUDDY_WHEELS:
         command.extend(["--msbuddy-wheel", str(MSBUDDY_WHEELS[0])])
     run(command, env=PIPELINE_ENV)
@@ -353,7 +365,7 @@ if not USE_PHASE2:
             "--spec-files", str(root / "mist/test_multiformula.mgf"),
             "--labels-file", str(labels_positive),
             "--output-dir", str(subforms_positive),
-            "--feature-id", "FEATURE_ID",
+            "--feature-id", "TITLE",
             "--num-workers", "0",
         ],
         cwd=MIST_SOURCE,
@@ -488,4 +500,3 @@ print("submission.csv is ready at /kaggle/working/submission.csv")
 # - `USE_PHASE2 = True` for the Phase 2 pipeline; set it to `False` only to reproduce the original 0.403 notebook workflow
 # - `/kaggle/working/submission.csv` produced and validated successfully
 # - Do not use a precomputed visible-test submission: Kaggle replaces `test.parquet` during the hidden rerun
-

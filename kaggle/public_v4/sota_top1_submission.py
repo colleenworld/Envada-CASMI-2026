@@ -14,6 +14,7 @@
 # ==============================================================================
 
 import os, sys, glob, re, subprocess, time, json, hashlib, pickle, gc
+from collections.abc import Iterable
 import numpy as np, pandas as pd
 
 T0 = time.time()
@@ -28,14 +29,116 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 # ── Robust Artifact Discovery ──────────────────────────────────────────────────
 def find(pattern, optional=False):
     hits = sorted(glob.glob(f'/kaggle/input/**/{pattern}', recursive=True), key=len)
+    asset_root = os.environ.get('CASMI_V4_ASSET_ROOT')
+    if not hits and asset_root:
+        hits = sorted(
+            glob.glob(
+                os.path.join(asset_root, '**', pattern),
+                recursive=True,
+            ),
+            key=len,
+        )
     if not hits:
         base = os.path.basename(pattern)
         hits = sorted(glob.glob(f'/kaggle/input/**/{base}', recursive=True), key=len)
+    if not hits and asset_root:
+        hits = sorted(
+            glob.glob(
+                os.path.join(asset_root, '**', base),
+                recursive=True,
+            ),
+            key=len,
+        )
     if not hits:
         hits = sorted(glob.glob(f'**/{pattern}', recursive=True), key=len)
     if not hits and not optional:
         raise FileNotFoundError(f"Could not find required dataset file: {pattern}")
     return hits[0] if hits else None
+
+def ensure_asset_symlink(source: str, destination: str) -> None:
+    """Create or repair a symlink to a required asset file."""
+    if not os.path.exists(source):
+        raise FileNotFoundError(f"Required asset does not exist: {source}")
+    if os.path.islink(destination):
+        if (
+            os.path.exists(destination)
+            and os.path.realpath(destination) == os.path.realpath(source)
+        ):
+            return
+        os.unlink(destination)
+    elif os.path.exists(destination):
+        return
+    os.symlink(source, destination)
+
+def load_pc_lists_cache(
+    path: str,
+    expected_ids: Iterable[object],
+) -> dict[str, dict[str, object]]:
+    """Load cached PubChem lists after validating their molecule IDs."""
+    if not os.path.isfile(path):
+        raise FileNotFoundError(path)
+    with open(path, encoding='utf-8') as handle:
+        cached = json.load(handle)
+    if not isinstance(cached, dict):
+        raise ValueError('Cached PubChem lists must be a JSON object')
+    expected = {str(mid) for mid in expected_ids}
+    actual = {str(mid) for mid in cached}
+    if actual != expected:
+        raise ValueError(
+            'Cached PubChem molecule IDs do not match validation input: '
+            f'missing={len(expected - actual)}, extra={len(actual - expected)}'
+        )
+    for mid, record in cached.items():
+        if not isinstance(record, dict):
+            raise ValueError(f'Invalid PubChem cache record for {mid}')
+        lists = [record.get(name) for name in ('pc', 'pc_fz', 'pc_keys')]
+        if any(not isinstance(value, list) for value in lists):
+            raise ValueError(f'Incomplete PubChem cache record for {mid}')
+        if len({len(value) for value in lists}) != 1:
+            raise ValueError(f'Unequal PubChem cache list lengths for {mid}')
+    return {str(mid): record for mid, record in cached.items()}
+
+def load_engine_lists_cache(
+    path: str,
+    expected_ids: Iterable[object],
+) -> dict[str, dict[str, list[str]]]:
+    """Load cached engine candidates after validating query IDs and lists."""
+    if not os.path.isfile(path):
+        raise FileNotFoundError(path)
+    with open(path, encoding='utf-8') as handle:
+        cached = json.load(handle)
+    if not isinstance(cached, dict):
+        raise ValueError('Cached engine lists must be a JSON object')
+    expected = {str(mid) for mid in expected_ids}
+    actual = {str(mid) for mid in cached}
+    if actual != expected:
+        raise ValueError(
+            'Cached engine molecule IDs do not match validation input: '
+            f'missing={len(expected - actual)}, extra={len(actual - expected)}'
+        )
+    for mid, record in cached.items():
+        if not isinstance(record, dict):
+            raise ValueError(f'Invalid engine cache record for {mid}')
+        smiles, keys = record.get('smiles'), record.get('keys')
+        if not isinstance(smiles, list) or not isinstance(keys, list):
+            raise ValueError(f'Incomplete engine cache record for {mid}')
+        if len(smiles) != len(keys):
+            raise ValueError(f'Unequal engine cache list lengths for {mid}')
+    return {str(mid): record for mid, record in cached.items()}
+
+def is_forward_wheel_compatible(filename: str, tag: str) -> bool:
+    """Keep universal and current-interpreter wheels, including renamed wheels."""
+    wheel = filename.removesuffix('.ice')
+    return (
+        '-py3-' in wheel
+        or '-py2.py3-' in wheel
+        or f'-{tag}-' in wheel
+        or '-none-any.whl' in wheel
+    )
+
+def forward_runner_extra_args() -> list[str]:
+    """Allow the installed local RDKit when the pinned panel wheel is incompatible."""
+    return ['--any-rdkit'] if os.environ.get('CASMI_LOCAL') == '1' else []
 
 def sha256(path, n=1 << 22):
     h = hashlib.sha256()
@@ -87,7 +190,14 @@ class RANK:
 
 T0 = time.time()
 LOCAL = os.environ.get("CASMI_LOCAL") == "1"
-ROOTS = [r"C:\\Users\\HW-LEE\\Desktop\\CASMI"] if LOCAL else ["/kaggle/input"]
+ASSET_ROOT = os.environ.get("CASMI_V4_ASSET_ROOT")
+if LOCAL:
+    if ASSET_ROOT:
+        ROOTS = [ASSET_ROOT]
+    else:
+        ROOTS = [r"C:\\Users\\HW-LEE\\Desktop\\CASMI"]
+else:
+    ROOTS = ["/kaggle/input"]
 
 def find(name):
     for root in ROOTS:
@@ -149,7 +259,19 @@ def _fp_init():
     from rdkit import RDLogger
     from rdkit.Chem import rdFingerprintGenerator
     RDLogger.DisableLog("rdApp.*")
-    _g["bits"] = np.load(find("fp_bits.npy"))
+    coco_fp_path = find("coco_fp.npy")
+    bits_path = os.path.join(os.path.dirname(coco_fp_path), "fp_bits.npy")
+    bits = np.load(bits_path)
+    fingerprint_size = 4096 + 4096 + 2048 + 167
+    if (
+        bits.ndim != 1
+        or not np.issubdtype(bits.dtype, np.integer)
+        or not len(bits)
+        or bits.min() < 0
+        or bits.max() >= fingerprint_size
+    ):
+        raise ValueError(f"Invalid COCONUT fingerprint bit indices: {bits_path}")
+    _g["bits"] = bits
     _g["m2"] = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=4096)
     _g["m3"] = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=4096)
     _g["rk"] = rdFingerprintGenerator.GetRDKitFPGenerator(fpSize=2048, maxPath=6)
@@ -181,7 +303,7 @@ def canon_key(smi):
     except Exception:
         return None
 
-def build_pool(L, workers):
+def build_pool(L, workers, include_pubchemlite=False):
     from multiprocessing import Pool as MPool
     d = os.path.dirname(find("coco_fp.npy"))
     cm = pickle.load(open(os.path.join(d, "coco_meta.pkl"), "rb"))
@@ -196,13 +318,58 @@ def build_pool(L, workers):
     co_keys = np.concatenate([co_keys, bkeys[bnew]])
     co_smi = np.concatenate([co_smi, np.asarray(bm["smiles"], dtype=object)[bnew]])
     log(f"+ ChEBI/LIPID MAPS {int(bnew.sum()):,} new structures")
+
+    if include_pubchemlite:
+        pcl_fp_path = find("pubchemlite_fp.npy")
+        pcl_dir = os.path.dirname(pcl_fp_path)
+        pcl_meta = pickle.load(open(os.path.join(pcl_dir, "pubchemlite_meta.pkl"), "rb"))
+        pcl_fp = np.load(pcl_fp_path, mmap_mode="r")
+        pcl_mass = np.load(os.path.join(pcl_dir, "pubchemlite_mass.npy"), mmap_mode="r")
+        pcl_keys = np.asarray(pcl_meta["keys"], dtype=object)
+        pcl_smi = np.asarray(pcl_meta["smiles"], dtype=object)
+        if not (
+            len(pcl_fp) == len(pcl_mass) == len(pcl_keys) == len(pcl_smi)
+        ):
+            raise ValueError(
+                "PubChemLite fingerprint, mass, and metadata lengths differ"
+            )
+        if pcl_fp.ndim != 2 or pcl_fp.shape[1] != co_fp.shape[1]:
+            raise ValueError(
+                "PubChemLite fingerprint dimensions do not match the "
+                "candidate pool"
+            )
+
+        seen = set(co_keys)
+        pcl_new = np.zeros(len(pcl_keys), dtype=bool)
+        for i, key in enumerate(pcl_keys):
+            if key not in seen:
+                seen.add(key)
+                pcl_new[i] = True
+        co_fp = np.vstack([co_fp, pcl_fp[pcl_new]])
+        co_mass = np.concatenate([co_mass, pcl_mass[pcl_new]])
+        co_keys = np.concatenate([co_keys, pcl_keys[pcl_new]])
+        co_smi = np.concatenate([co_smi, pcl_smi[pcl_new]])
+        log(f"+ PubChemLite {int(pcl_new.sum()):,} new structures")
+
     tr = pd.DataFrame({"ik": L["ik"], "smi": L["smi"]}).dropna().drop_duplicates("ik")
     tr = tr[~tr.ik.isin(set(co_keys))]
     log(f"COCONUT {len(co_keys):,}; training structures to fingerprint {len(tr):,}")
     with MPool(workers) as mp:
         res = mp.map(fp_and_mass, list(tr.smi), chunksize=500)
-    ok = np.array([r is not None for r in res])
-    tr_fp = np.stack([r[0] for r in res if r is not None]); tr_mass = np.array([r[1] for r in res if r is not None])
+    ok = np.fromiter(
+        (r is not None for r in res),
+        dtype=bool,
+        count=len(res),
+    )
+    valid_results = [r for r in res if r is not None]
+    log(f"training fingerprints {len(valid_results):,}/{len(res):,}")
+    if valid_results:
+        tr_fp = np.stack([r[0] for r in valid_results])
+        tr_mass = np.array([r[1] for r in valid_results])
+    else:
+        tr_fp = co_fp[:0]
+        tr_mass = co_mass[:0]
+        log("No training fingerprints generated; using asset candidates only")
     fp = np.vstack([co_fp, tr_fp]); mass = np.concatenate([co_mass, tr_mass])
     keys = np.concatenate([co_keys, tr.ik.values[ok]]); smis = np.concatenate([co_smi, tr.smi.values[ok]])
     good = np.isfinite(mass)
@@ -464,7 +631,9 @@ def main(test_path, train_path, sample_path, our_rank_path, pv_rank_path, fp_mod
     import torch
     import pv_fp
     L = load_library(train_path); log(f"library {len(L['prec']):,} spectra")
-    POOL = build_pool(L, workers)
+    include_pubchemlite = os.environ.get("CASMI_INCLUDE_PUBCHEMLITE") == "1"
+    log(f"PubChemLite candidate pool: {'enabled' if include_pubchemlite else 'disabled'}")
+    POOL = build_pool(L, workers, include_pubchemlite=include_pubchemlite)
     L["row_p"] = POOL["k2i"].reindex(L["ik"]).fillna(-1).values.astype(np.int64)
     del L["ik"], L["smi"]
     I = build_index(L)
@@ -500,21 +669,31 @@ if __name__ == '__main__':
     C = dict(W_A=(0.35, 0.55), SEEDS=(0, 1), N_ANALOG=200, W_PV=0.88, ORDER_K=80, TOPK=40)
     C.update(json.loads(os.environ.get('CASMI_ENG_CFG', '{}')))
     _orig_find = E.find
+    asset_root = os.environ.get('CASMI_V4_ASSET_ROOT')
+    search_roots = ['/kaggle/input']
+    if asset_root: search_roots.append(asset_root)
+    search_roots.append('.')
+    def _glob_asset(name):
+        hits = []
+        for root in search_roots:
+            hits.extend(glob.glob(os.path.join(root, '**', name), recursive=True))
+        return sorted(set(hits), key=len)
     def _find(n):
-        if n == 'fp_bits.npy':
-            hits = glob.glob('/kaggle/input/**/coco_fp.npy', recursive=True) or glob.glob('**/coco_fp.npy', recursive=True)
-            if hits: return os.path.join(os.path.dirname(hits[0]), 'fp_bits.npy')
-        hits = glob.glob(f'/kaggle/input/**/{n}', recursive=True) or glob.glob(f'**/{n}', recursive=True)
-        if hits: return sorted(hits, key=len)[0]
+        hits = _glob_asset(n)
+        if hits: return hits[0]
         return _orig_find(n)
     E.find = _find
     E.RANK.W_A = tuple(C['W_A']); E.RANK.SEEDS = tuple(C['SEEDS']); E.CFG.N_ANALOG = int(C['N_ANALOG'])
     
-    fp_models = sorted(p for p in glob.glob('/kaggle/input/**/fp_*.pt', recursive=True) if ('casmi26-fp-models' in p or 'fingerprint' in p.lower() or 'single' in p.lower() or 'merged' in p.lower()))
+    fp_models = sorted(
+        p for p in _glob_asset('fp_*.pt')
+        if ('casmi26-fp-models' in p or 'fingerprint' in p.lower()
+            or 'single' in p.lower() or 'merged' in p.lower())
+    )
     if not fp_models:
-        fp_models = sorted(glob.glob('/kaggle/input/**/fp_*.pt', recursive=True))
+        fp_models = _glob_asset('fp_*.pt')
     if not fp_models:
-        fp_models = sorted(glob.glob('/kaggle/input/**/fpnet_*.pt', recursive=True))[:2]
+        fp_models = _glob_asset('fpnet_*.pt')[:2]
     print('engine fp models', fp_models, flush=True)
     assert len(fp_models) > 0, "No fingerprint models found!"
     
@@ -2087,7 +2266,7 @@ CFG = dict(
 # ── SOTA Top-1 (0.455 -> 0.500+) Plan B Master Breakthrough Overrides ─────────
 CFG.update({
     # Proven public-LB 0.420 configuration from the upstream ablation.
-    'VERSION': 'v18-proven-0420-config',
+    'VERSION': 'v18-fuse-alpha-0.30',
     'E2_RANK2': False,
     'POP_MU': 0.25,
     'FRAG_LAM': 0.5,
@@ -2105,11 +2284,32 @@ CFG.update({
     'FUSE_ENG_K': 40,
     'ICE_UNION_K': 40,
     'FILL_25': True,
-    'FUSE_ALPHA': 0.60,
+    'FUSE_ALPHA': 0.30,
     'FUSE_KRR': 3.0,
     'ICE_SURROGATE': True,
     'GL_SURROGATE': True
 })
+
+def apply_fuse_alpha_override(
+    cfg: dict[str, object],
+    raw_alpha: str | None,
+) -> None:
+    """Apply a validated fusion-weight override for controlled experiments."""
+    if raw_alpha is None:
+        return
+    try:
+        alpha = float(raw_alpha)
+    except ValueError as error:
+        raise ValueError(
+            'CASMI_V4_FUSE_ALPHA must be between 0 and 1'
+        ) from error
+    if not np.isfinite(alpha) or not 0.0 <= alpha <= 1.0:
+        raise ValueError('CASMI_V4_FUSE_ALPHA must be between 0 and 1')
+    cfg['FUSE_ALPHA'] = alpha
+    cfg['VERSION'] = f'v18-fuse-alpha-{alpha:.2f}'
+
+
+apply_fuse_alpha_override(CFG, os.environ.get('CASMI_V4_FUSE_ALPHA'))
 
 # ── 3. Setup: RDKit Wheel, Input Discovery, Write Embedded Sources ──────────────
 tag = f'cp{sys.version_info.major}{sys.version_info.minor}'
@@ -2193,29 +2393,46 @@ log('RERUN', IS_RERUN, '| sig', _sig, '| COMP', COMP, '| ICE_BUDGET', ICE_BUDGET
 # ── 5. Engine-2 (Two-Ranker Engine, BIO + AFIX) Subprocess ─────────────────────
 ENG = {}
 if CFG['USE_ENG']:
-    try:
-        _t0 = time.time()
-        _env = dict(os.environ, CASMI_ENG_CFG=json.dumps(dict(
-            W_A=CFG['ENG_W_A'], SEEDS=CFG['ENG_SEEDS'], N_ANALOG=CFG['ENG_N_ANALOG'],
-            W_PV=CFG['ENG_W_PV'], ORDER_K=CFG['ENG_ORDER_K'], TOPK=CFG['ENG_TOPK'])))
-        rr = subprocess.run([sys.executable, os.path.join(OURS, 'eng', 'eng_runner.py'),
-                             os.path.join(COMP, 'test.parquet'), os.path.join(COMP, 'train.parquet'),
-                             os.path.join(COMP, 'sample_submission.csv'), os.path.join(WORK, 'eng_lists.json')],
-                            capture_output=True, text=True, timeout=CFG['STAGE_TIMEOUT_S'], cwd=os.path.join(OURS, 'eng'), env=_env)
-        print(rr.stdout[-3000:]); print(rr.stderr[-3000:])
-        ENG = json.load(open(os.path.join(WORK, 'eng_lists.json')))
-        log('engine-2 lists', len(ENG), f'{time.time()-_t0:.0f}s')
-        if len(ENG) == 0:
-            log('Notice: Engine 2 produced 0 molecules; v4 lists will be used as base.')
-    except Exception as e:
-        print('ENGINE-2 FAILED -> v4 lists kept:', repr(e))
-        ENG = {}
+    _eng_cache = os.environ.get('CASMI_ENG_LISTS_CACHE')
+    if _eng_cache:
+        _eng_ids = pd.read_parquet(
+            os.path.join(COMP, 'test.parquet'),
+            columns=['molecule_id'],
+        ).molecule_id
+        ENG = load_engine_lists_cache(_eng_cache, _eng_ids)
+        log('reused cached engine lists', len(ENG))
+    else:
+        try:
+            _t0 = time.time()
+            _env = dict(os.environ, CASMI_ENG_CFG=json.dumps(dict(
+                W_A=CFG['ENG_W_A'], SEEDS=CFG['ENG_SEEDS'], N_ANALOG=CFG['ENG_N_ANALOG'],
+                W_PV=CFG['ENG_W_PV'], ORDER_K=CFG['ENG_ORDER_K'], TOPK=CFG['ENG_TOPK'])))
+            rr = subprocess.run([sys.executable, os.path.join(OURS, 'eng', 'eng_runner.py'),
+                                 os.path.join(COMP, 'test.parquet'), os.path.join(COMP, 'train.parquet'),
+                                 os.path.join(COMP, 'sample_submission.csv'), os.path.join(WORK, 'eng_lists.json')],
+                                capture_output=True, text=True, timeout=CFG['STAGE_TIMEOUT_S'], cwd=os.path.join(OURS, 'eng'), env=_env)
+            print(rr.stdout[-3000:]); print(rr.stderr[-3000:])
+            ENG = json.load(open(os.path.join(WORK, 'eng_lists.json')))
+            log('engine-2 lists', len(ENG), f'{time.time()-_t0:.0f}s')
+            if len(ENG) == 0:
+                log('Notice: Engine 2 produced 0 molecules; v4 lists will be used as base.')
+        except Exception as e:
+            print('ENGINE-2 FAILED -> v4 lists kept:', repr(e))
+            ENG = {}
 dump('eng', ENG)
 
 # ── 6. PubChem-Only Channel Subprocess ─────────────────────────────────────────
 PC = {}
 _pc_env = dict(os.environ, CASMI_PC_N1=str(CFG['PC_N1']), CASMI_PC_K=str(max(25, CFG['PC_JOIN_N'])))
-if CFG['USE_PC']:
+_pc_cache = os.environ.get('CASMI_PC_LISTS_CACHE')
+if _pc_cache:
+    _pc_ids = pd.read_parquet(
+        os.path.join(COMP, 'test.parquet'),
+        columns=['molecule_id'],
+    ).molecule_id
+    PC = load_pc_lists_cache(_pc_cache, _pc_ids)
+    log('reused cached PubChem lists', len(PC))
+elif CFG['USE_PC']:
     try:
         rr = subprocess.run([sys.executable, os.path.join(OURS, 'pc', 'pc_runner.py'),
                              V3CODE, V3MOD, POOL_DIR, PC_DIR, os.path.join(COMP, 'test.parquet'),
@@ -2246,8 +2463,7 @@ dump('pc', PC)
 sys.path.insert(0, V4CODE)
 os.makedirs('work', exist_ok=True)
 for f in ['pool_meta.parquet', 'pool_fp.npy', 'pool_frag_off.npy', 'pool_frag_mass.npy', 'fp_bits.npy', 'train_structs.parquet', 'train_fp_sel.npy']:
-    if not os.path.exists(f'work/{f}'):
-        os.symlink(os.path.join(POOL_DIR, f), f'work/{f}')
+    ensure_asset_symlink(os.path.join(POOL_DIR, f), f'work/{f}')
 
 from casmi.build import build_spec_cache
 build_spec_cache(os.path.join(COMP, 'train.parquet'), 'work')
@@ -2499,16 +2715,13 @@ def _shadow_forward_pkg(src_pkg):
 
     kept, skipped = [], []
     if os.path.isdir(src_wheels):
-        for wheel in sorted(glob.glob(os.path.join(src_wheels, '*.whl'))):
+        wheel_paths = (
+            glob.glob(os.path.join(src_wheels, '*.whl'))
+            + glob.glob(os.path.join(src_wheels, '*.whl.ice'))
+        )
+        for wheel in sorted(wheel_paths):
             base = os.path.basename(wheel)
-            # Universal wheels and wheels for the current CPython are safe.
-            compatible = (
-                '-py3-' in base
-                or '-py2.py3-' in base
-                or f'-{tag}-' in base
-                or '-none-any.whl' in base
-            )
-            if compatible:
+            if is_forward_wheel_compatible(base, tag):
                 os.symlink(wheel, os.path.join(dst_wheels, base))
                 kept.append(base)
             else:
@@ -2579,7 +2792,15 @@ if CFG['USE_ICE']:
             except Exception as se:
                 log('ICE surrogate extension skipped:', repr(se))
         log('ICE input molecules', len(items), 'candidates', sum(len(it['cands']) for it in items))
-        ICE_SCORES = ice_fuse.run_ice(ICE_PKG, items, workdir=os.path.join(WORK, 'ice_work'), device='cuda', budget_s=ICE_BUDGET, site=os.path.join(WORK, 'ice_site'))
+        ICE_SCORES = ice_fuse.run_ice(
+            ICE_PKG,
+            items,
+            workdir=os.path.join(WORK, 'ice_work'),
+            device='cuda',
+            budget_s=ICE_BUDGET,
+            site=os.path.join(WORK, 'ice_site'),
+            extra_args=forward_runner_extra_args(),
+        )
         meta_f = os.path.join(WORK, 'ice_work', 'ice_out.json.meta.json')
         if os.path.exists(meta_f): print('ICE meta', open(meta_f).read()[:1500])
     except Exception as e:
@@ -2592,7 +2813,16 @@ if CFG['USE_GL'] and items:
         sys.path.append(GL_PKG)
         import gl_fuse
         gc.collect(); torch.cuda.empty_cache()
-        GL_SCORES = gl_fuse.run_gl(GL_PKG, items, workdir=os.path.join(WORK, 'gl_work'), device='cuda', budget_s=CFG['GL_BUDGET'], site=os.path.join(WORK, 'ice_site'), wheels=os.path.join(ICE_PKG, 'wheels'))
+        GL_SCORES = gl_fuse.run_gl(
+            GL_PKG,
+            items,
+            workdir=os.path.join(WORK, 'gl_work'),
+            device='cuda',
+            budget_s=CFG['GL_BUDGET'],
+            site=os.path.join(WORK, 'ice_site'),
+            wheels=os.path.join(ICE_PKG, 'wheels'),
+            extra_args=forward_runner_extra_args(),
+        )
         meta_f = os.path.join(WORK, 'gl_work', 'gl_out.json.meta.json')
         print('GL meta', open(meta_f).read()[:1500] if os.path.exists(meta_f) else 'missing')
     except Exception as e:
@@ -2658,8 +2888,12 @@ sub = fusion_core.validate(sub, list(samp.molecule_id))
 sub.to_csv(os.path.join(WORK, 'submission.csv'), index=False)
 sub.to_csv('submission.csv', index=False)
 
+run_cfg = dict(CFG)
+run_cfg["INCLUDE_PUBCHEMLITE"] = (
+    os.environ.get("CASMI_INCLUDE_PUBCHEMLITE") == "1"
+)
 json.dump(dict(version=CFG['VERSION'], secs=round(time.time() - T0), stats=FSTATS, n_errors=n_err,
-               families=MAN['families'], gpu=torch.cuda.get_device_name(0) if dev == 'cuda' else None, cfg=CFG),
+               families=MAN['families'], gpu=torch.cuda.get_device_name(0) if dev == 'cuda' else None, cfg=run_cfg),
           open(os.path.join(WORK, 'run_manifest.json'), 'w'), indent=1)
 
 log('fusion stats', FSTATS)

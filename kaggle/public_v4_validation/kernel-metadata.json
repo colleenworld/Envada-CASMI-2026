@@ -1,6 +1,6 @@
 {
   "id": "ColleenDavis/casmi26-public-v4-validation",
-  "title": "CASMI26 Public V4 Validation",
+  "title": "CASMI26 Public V4 Validation (FUSE_ALPHA=0.30)",
   "code_file": "sota_top1_validation.py",
   "language": "python",
   "kernel_type": "script",

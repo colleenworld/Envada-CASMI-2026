@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import msbuddy
 from msbuddy import Msbuddy, MsbuddyConfig
 from msbuddy.base import MetaFeature, Spectrum
 
@@ -66,6 +67,12 @@ MSBUDDY_TIMEOUT_SECS = float(
         "120.0",
     )
 )
+
+MSBUDDY_DATA_FILENAMES = {
+    "common_db": "common_db_v0.2.4.joblib",
+    "formula_db": "formula_db_v0.2.4.joblib",
+    "ml_model": "ml_v0.3.0.joblib",
+}
 
 
 def spectrum_from_row(
@@ -203,6 +210,42 @@ def run_msbuddy(
             "No supported spectra are available for MSBuddy."
         )
 
+    project_data_dir = (
+        PROJECT_ROOT / "data/external/msbuddy"
+    )
+    package_data_dir = (
+        Path(msbuddy.__file__).resolve().parent / "data"
+    )
+    data_dirs = (
+        project_data_dir,
+        package_data_dir,
+    )
+    data_files = None
+    missing_files = []
+    for data_dir in data_dirs:
+        candidate_files = {
+            key: data_dir / filename
+            for key, filename in MSBUDDY_DATA_FILENAMES.items()
+        }
+        missing_files = [
+            path
+            for path in candidate_files.values()
+            if not path.is_file()
+        ]
+        if not missing_files:
+            data_files = {
+                key: str(path)
+                for key, path in candidate_files.items()
+            }
+            break
+    if data_files is None:
+        raise FileNotFoundError(
+            "MSBuddy offline data files are missing:\n  "
+            + "\n  ".join(str(path) for path in missing_files)
+            + "\nProvide them under data/external/msbuddy or the "
+            "installed msbuddy package data directory."
+        )
+
     config = MsbuddyConfig(
         ms_instr=None,
         ppm=True,
@@ -211,6 +254,7 @@ def run_msbuddy(
         halogen=True,
         parallel=False,
         timeout_secs=MSBUDDY_TIMEOUT_SECS,
+        data_files=data_files,
     )
 
     engine = Msbuddy(

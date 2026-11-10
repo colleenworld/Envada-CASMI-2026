@@ -4,6 +4,7 @@ import pickle
 import sys
 
 import pandas as pd
+from rdkit import RDLogger
 
 from casmi26.pubchem.mass_tier_candidates import (
     load_mass_tier_candidates,
@@ -65,6 +66,18 @@ HDF_OUTPUT_DIR = (
 
 DATABASE_NAME = (
     "casmi_test_morgan4096"
+)
+MAX_STRUCTURES_PER_FORMULA = int(
+    os.environ.get(
+        "CASMI26_MAX_STRUCTURES_PER_FORMULA",
+        "0",
+    )
+)
+
+# Suppress RDKit parser/deprecation noise emitted inside MIST's
+# make_retrieval_hdf5 implementation (invalid SMILES and Morgan API warnings).
+RDLogger.DisableLog(
+    "rdApp.*"
 )
 
 
@@ -597,6 +610,9 @@ def main():
                 "candidate_formula",
                 "candidate_inchikey14",
                 "candidate_smiles",
+                "in_training",
+                "in_coconut",
+                "in_pubchem_mass_tier",
             ]
         ]
         .drop_duplicates(
@@ -606,6 +622,53 @@ def main():
             ]
         )
     )
+
+    if MAX_STRUCTURES_PER_FORMULA > 0:
+        before_cap = len(
+            formula_structures
+        )
+        formula_structures = (
+            formula_structures
+            .sort_values(
+                [
+                    "candidate_formula",
+                    "in_training",
+                    "in_coconut",
+                    "in_pubchem_mass_tier",
+                    "candidate_inchikey14",
+                ],
+                ascending=[
+                    True,
+                    False,
+                    False,
+                    True,
+                    True,
+                ],
+            )
+            .groupby(
+                "candidate_formula",
+                sort=False,
+            )
+            .head(
+                MAX_STRUCTURES_PER_FORMULA
+            )
+            .reset_index(
+                drop=True
+            )
+        )
+        print()
+        print(
+            "Per-formula structure cap:",
+            MAX_STRUCTURES_PER_FORMULA,
+        )
+        print(
+            "Formula/structure entries before cap:",
+            before_cap,
+        )
+        print(
+            "Formula/structure entries after cap:",
+            len(formula_structures),
+        )
 
     form_to_smi = {}
 

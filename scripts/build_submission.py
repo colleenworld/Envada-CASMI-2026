@@ -36,6 +36,42 @@ OUTPUT_PATH = (
 )
 
 MAX_CANDIDATES = 25
+MAX_BRANCH_CANDIDATES = int(
+    os.environ.get(
+        "CASMI26_SUBMISSION_MAX_BRANCH_CANDIDATES",
+        "200",
+    )
+)
+
+FUSION_MODE = (
+    os.environ.get(
+        "CASMI26_SUBMISSION_FUSION_MODE",
+        "strict",
+    )
+    .strip()
+    .lower()
+)
+
+RRF_K = float(
+    os.environ.get(
+        "CASMI26_SUBMISSION_RRF_K",
+        "60.0",
+    )
+)
+
+POSITIVE_WEIGHT = float(
+    os.environ.get(
+        "CASMI26_SUBMISSION_POSITIVE_WEIGHT",
+        "1.0",
+    )
+)
+
+FALLBACK_WEIGHT = float(
+    os.environ.get(
+        "CASMI26_SUBMISSION_FALLBACK_WEIGHT",
+        "1.0",
+    )
+)
 
 
 def find_smiles_column(
@@ -73,7 +109,6 @@ def empty_prepared_rankings():
             "molecule_id",
             "smiles",
             "rank",
-            "submission_rank",
         ]
     )
 
@@ -82,6 +117,7 @@ def prepare_rankings(
     df,
     *,
     label,
+    max_candidates,
 ):
     #
     # An empty ranking branch is legitimate.
@@ -241,10 +277,10 @@ def prepare_rankings(
     )
 
     #
-    # Re-rank after deduplication and keep at most 25.
+    # Re-rank after deduplication.
     #
     work[
-        "submission_rank"
+        "rank"
     ] = (
         work.groupby(
             "molecule_id"
@@ -255,12 +291,227 @@ def prepare_rankings(
 
     work = work[
         work[
+            "rank"
+        ]
+        <= max_candidates
+    ].copy()
+
+    return work
+
+
+def combine_rankings_strict(
+    positive: pd.DataFrame,
+    fallback: pd.DataFrame,
+) -> pd.DataFrame:
+    positive_ids = set(
+        positive[
+            "molecule_id"
+        ]
+    )
+
+    fallback_ids = set(
+        fallback[
+            "molecule_id"
+        ]
+    )
+
+    overlap = (
+        positive_ids
+        & fallback_ids
+    )
+
+    if overlap:
+        raise ValueError(
+            "Positive and fallback ranking branches overlap: "
+            f"{sorted(overlap)[:20]}"
+        )
+
+    combined = pd.concat(
+        [
+            positive,
+            fallback,
+        ],
+        ignore_index=True,
+    )
+
+    combined = combined.sort_values(
+        [
+            "molecule_id",
+            "rank",
+            "smiles",
+        ],
+        ascending=[
+            True,
+            True,
+            True,
+        ],
+    ).reset_index(
+        drop=True
+    )
+
+    combined[
+        "submission_rank"
+    ] = combined[
+        "rank"
+    ].astype(int)
+
+    combined = combined[
+        combined[
             "submission_rank"
         ]
         <= MAX_CANDIDATES
     ].copy()
 
-    return work
+    return combined
+
+
+def combine_rankings_rrf(
+    positive: pd.DataFrame,
+    fallback: pd.DataFrame,
+) -> pd.DataFrame:
+    positive_view = positive.rename(
+        columns={
+            "rank":
+                "positive_rank",
+        }
+    )
+
+    fallback_view = fallback.rename(
+        columns={
+            "rank":
+                "fallback_rank",
+        }
+    )
+
+    fused = positive_view.merge(
+        fallback_view,
+        on=[
+            "molecule_id",
+            "smiles",
+        ],
+        how="outer",
+        validate="one_to_one",
+    )
+
+    fused[
+        "rrf_score"
+    ] = 0.0
+
+    positive_mask = (
+        fused[
+            "positive_rank"
+        ].notna()
+    )
+
+    fused.loc[
+        positive_mask,
+        "rrf_score",
+    ] += (
+        POSITIVE_WEIGHT
+        / (
+            RRF_K
+            + fused.loc[
+                positive_mask,
+                "positive_rank",
+            ].astype(float)
+        )
+    )
+
+    fallback_mask = (
+        fused[
+            "fallback_rank"
+        ].notna()
+    )
+
+    fused.loc[
+        fallback_mask,
+        "rrf_score",
+    ] += (
+        FALLBACK_WEIGHT
+        / (
+            RRF_K
+            + fused.loc[
+                fallback_mask,
+                "fallback_rank",
+            ].astype(float)
+        )
+    )
+
+    fused[
+        "best_rank"
+    ] = fused[
+        [
+            "positive_rank",
+            "fallback_rank",
+        ]
+    ].min(
+        axis=1,
+        skipna=True,
+    )
+
+    fused = fused.sort_values(
+        [
+            "molecule_id",
+            "rrf_score",
+            "best_rank",
+            "smiles",
+        ],
+        ascending=[
+            True,
+            False,
+            True,
+            True,
+        ],
+    ).reset_index(
+        drop=True
+    )
+
+    fused[
+        "submission_rank"
+    ] = (
+        fused.groupby(
+            "molecule_id"
+        )
+        .cumcount()
+        + 1
+    )
+
+    fused = fused[
+        fused[
+            "submission_rank"
+        ]
+        <= MAX_CANDIDATES
+    ].copy()
+
+    return fused[
+        [
+            "molecule_id",
+            "smiles",
+            "submission_rank",
+        ]
+    ]
+
+
+def combine_rankings(
+    positive: pd.DataFrame,
+    fallback: pd.DataFrame,
+) -> pd.DataFrame:
+    if FUSION_MODE == "strict":
+        return combine_rankings_strict(
+            positive,
+            fallback,
+        )
+
+    if FUSION_MODE == "rrf":
+        return combine_rankings_rrf(
+            positive,
+            fallback,
+        )
+
+    raise ValueError(
+        "Unsupported submission fusion mode "
+        f"{FUSION_MODE!r}. Use strict or rrf."
+    )
 
 
 def main():
@@ -338,46 +589,18 @@ def main():
     positive = prepare_rankings(
         positive_raw,
         label="positive",
+        max_candidates=MAX_BRANCH_CANDIDATES,
     )
 
     negative = prepare_rankings(
         negative_raw,
         label="fallback",
+        max_candidates=MAX_BRANCH_CANDIDATES,
     )
 
-    positive_ids = set(
-        positive[
-            "molecule_id"
-        ]
-    )
-
-    negative_ids = set(
-        negative[
-            "molecule_id"
-        ]
-    )
-
-    overlap = (
-        positive_ids
-        & negative_ids
-    )
-
-    #
-    # This remains strict: a molecule should be owned by exactly one
-    # ranking branch.
-    #
-    if overlap:
-        raise ValueError(
-            "Positive and fallback ranking branches overlap: "
-            f"{sorted(overlap)[:20]}"
-        )
-
-    combined = pd.concat(
-        [
-            positive,
-            negative,
-        ],
-        ignore_index=True,
+    combined = combine_rankings(
+        positive,
+        negative,
     )
 
     #
@@ -573,6 +796,11 @@ def main():
         len(
             submission
         ),
+    )
+
+    print(
+        "Fusion mode:",
+        FUSION_MODE,
     )
 
     print(
