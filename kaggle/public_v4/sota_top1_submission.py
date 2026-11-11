@@ -2265,11 +2265,11 @@ CFG = dict(
 
 # ── SOTA Top-1 (0.455 -> 0.500+) Plan B Master Breakthrough Overrides ─────────
 CFG.update({
-    # Proven public-LB 0.420 configuration from the upstream ablation.
-    'VERSION': 'v18-fuse-alpha-0.30',
+    # Cached paired-ablation winner; confirm with a controlled Kaggle run.
+    'VERSION': 'v19-fuse-alpha-0.00-frag-off',
     'E2_RANK2': False,
     'POP_MU': 0.25,
-    'FRAG_LAM': 0.5,
+    'FRAG_LAM': 0.0,
     'FRAG_MODE': 'gap',
     'ICE_LAM': 1.0,
     'GL_LAM': 1.0,
@@ -2284,7 +2284,7 @@ CFG.update({
     'FUSE_ENG_K': 40,
     'ICE_UNION_K': 40,
     'FILL_25': True,
-    'FUSE_ALPHA': 0.30,
+    'FUSE_ALPHA': 0.0,
     'FUSE_KRR': 3.0,
     'ICE_SURROGATE': True,
     'GL_SURROGATE': True
@@ -2306,7 +2306,7 @@ def apply_fuse_alpha_override(
     if not np.isfinite(alpha) or not 0.0 <= alpha <= 1.0:
         raise ValueError('CASMI_V4_FUSE_ALPHA must be between 0 and 1')
     cfg['FUSE_ALPHA'] = alpha
-    cfg['VERSION'] = f'v18-fuse-alpha-{alpha:.2f}'
+    cfg['VERSION'] = f'v19-fuse-alpha-{alpha:.2f}-frag-off'
 
 
 apply_fuse_alpha_override(CFG, os.environ.get('CASMI_V4_FUSE_ALPHA'))
